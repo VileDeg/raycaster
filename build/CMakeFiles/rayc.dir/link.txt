@@ -1,1 +1,0 @@
-/usr/bin/cc -g CMakeFiles/rayc.dir/src/main.c.o CMakeFiles/rayc.dir/src/glad.c.o -o rayc  glfw-3.3.8/src/libglfw3.a /usr/lib/x86_64-linux-gnu/libGL.so /usr/lib/x86_64-linux-gnu/librt.a -lm -ldl /usr/lib/x86_64-linux-gnu/libX11.so 
