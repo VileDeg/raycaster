@@ -1,63 +1,70 @@
-#pragma once
+#ifndef _VEC2_H_
+#define _VEC2_H_
 
-#include <iostream>
-#include <cmath>
+#include <math.h>
+#include <stdio.h>
 
-struct vec2 {
-    vec2()
-        : x(0), y(0)
-    {}
+#define _vec2_buf_len 16
+static char _vec2_buf[_vec2_buf_len];
 
-    vec2(float x, float y) 
-        : x(x), y(y)
-    {}
-
-    float magnitude() {
-        return std::sqrt(x*x + y*y);
-    }
-
-    vec2 normalized() {
-        float mag = std::sqrt(x*x + y*y);
-        return vec2(x/mag, y/mag);
-    }
-
-    vec2 perpendicular() {
-        return vec2(-y, x);
-    }
-
+typedef struct {
     float x, y;
-};
+} Vec2;
 
-vec2 operator+(const vec2& lhs, const vec2& rhs) {
-    return vec2(lhs.x + rhs.x, lhs.y + rhs.y);
+float vec2_magnitude(Vec2 v) {
+    return sqrt(v.x * v.x + v.y * v.y);
 }
 
-void operator+=(vec2& lhs, const vec2& rhs) {
-    lhs.x += rhs.x;
-    lhs.y += rhs.y;
+Vec2 vec2_normalized(Vec2 v) {
+    float mag = sqrt(v.x * v.x + v.y * v.y);
+    return (Vec2){ v.x/mag, v.y/mag };
 }
 
-vec2 operator-(const vec2& lhs, const vec2& rhs) {
-    return vec2(lhs.x - rhs.x, lhs.y - rhs.y);
+
+Vec2 vec2_perpendicular(Vec2 v) {
+    return (Vec2){ -v.y, v.x };
 }
 
-vec2 operator*(const vec2& lhs, const vec2& rhs) {
-    return vec2(lhs.x * rhs.x, lhs.y * rhs.y);
+
+Vec2 vec2_add(Vec2 v, Vec2 vv) {
+    return (Vec2){ v.x+vv.x, v.y+vv.y };
 }
 
-vec2 operator*(const float lhs, const vec2& rhs) {
-    return vec2(lhs * rhs.x, lhs * rhs.y);
+
+Vec2 vec2_sub(Vec2 v, Vec2 vv) {
+    return (Vec2){ v.x-vv.x, v.y-vv.y };
 }
 
-vec2 operator*(const vec2& lhs, const float rhs) {
-    return vec2(lhs.x * rhs, lhs.y * rhs);
+Vec2 vec2_subf(Vec2 v, float f) {
+    return (Vec2){ v.x-f, v.y-f };
 }
 
-vec2 operator/(const vec2& lhs, const vec2& rhs) {
-    return vec2(lhs.x / rhs.x, lhs.y / rhs.y);
+
+Vec2 vec2_mul(Vec2 v, Vec2 vv) {
+    return (Vec2){ v.x*vv.x, v.y*vv.y };
 }
 
-std::ostream& operator<<(std::ostream& lhs, const vec2& rhs) {
-    lhs << "(" << rhs.x << "," << rhs.y << ")";
-    return lhs;
+Vec2 vec2_mulf(Vec2 v, float f) {
+    return (Vec2){ v.x*f, v.y*f };
 }
+
+
+Vec2 vec2_div(Vec2 v, Vec2 vv) {
+    return (Vec2){ v.x/vv.x, v.y/vv.y };
+}
+
+Vec2 vec2_divf(Vec2 v, float f) {
+    return (Vec2){ v.x/f, v.y/f };
+}
+
+Vec2 vec2_fdiv(float f, Vec2 v) {
+    return (Vec2){ f/v.x, f/v.y };
+}
+
+
+char* vec2_str(Vec2 v) {
+    snprintf(_vec2_buf, _vec2_buf_len, "(%.2f, %.2f)", v.x, v.y);
+    return _vec2_buf;
+}
+
+#endif // _VEC2_H_

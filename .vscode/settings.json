@@ -1,7 +1,7 @@
 {
     "files.associations": {
         "*.c": "c",
-        "*.h": "cpp",
+        "*.h": "c",
         "*.pl": "prolog",
         "array": "cpp",
         "atomic": "cpp",
@@ -61,5 +61,6 @@
         "thread": "cpp",
         "cinttypes": "cpp",
         "typeinfo": "cpp"
-    }
+    },
+    "C_Cpp.default.compilerPath": "/usr/bin/gcc"
 }
