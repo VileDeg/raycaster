@@ -2,64 +2,37 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <errno.h>
+#include <time.h>
+
 
 #include "glad/glad.h"
 #include "GLFW/glfw3.h"
 
 #include "vec2.h"
+#include "texture_buffer.h"
+
+#define max(x, y) ((x) > (y) ? (x) : (y))
 
 static const int ROWS = 128;
 static const int COLS = 128;
 
-// static const int PIX_W = 4;
-// static const int PIX_H = 4;
+static const int PIX_W = 4;
+static const int PIX_H = 4;
+
+static int SCR_WIDTH  = COLS * PIX_W;
+static int SCR_HEIGHT = ROWS * PIX_H;
 
 
 
-// const char *vertexShaderSource = "#version 330 core\n"
-//     "layout (location = 0) in vec3 aPos;\n"
-//     "void main()\n"
-//     "{\n"
-//     "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
-//     "}\0";
-// const char *fragmentShaderSource = "#version 330 core\n"
-//     "out vec4 FragColor;\n"
-//     "void main()\n"
-//     "{\n"
-//     "   FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);\n"
-//     "}\n\0";
-
-static int SCR_WIDTH;
-static int SCR_HEIGHT;
-
-typedef struct {
-    GLubyte r;
-    GLubyte g;
-    GLubyte b;
-} Pixel;
-
-Pixel* TEX_DATA = NULL;
 
 
-#define CHECK_IMAGE_WIDTH 64
-#define CHECK_IMAGE_HEIGHT 64
-static GLubyte checkImage[CHECK_IMAGE_WIDTH][CHECK_IMAGE_HEIGHT][3];
 
-void makeCheckImage(void) {
+GLFWwindow* window = NULL;
+static TextureBuffer tb;
 
-  int i, j, c;
 
-  for (i = 0; i < CHECK_IMAGE_HEIGHT; i++)
 
-    for (j = 0; j < CHECK_IMAGE_WIDTH; j++) {
-
-      checkImage[i][j][0] = (GLubyte) 255;
-      checkImage[i][j][1] = (GLubyte) i == j ? 255 : 0;
-      checkImage[i][j][2] = (GLubyte) 255;
-
-    }
-
-}
 
 void glfw_error_callback(int error, const char* description) 
 {
@@ -68,24 +41,28 @@ void glfw_error_callback(int error, const char* description)
 
 
 
-void update_tex_data(int width, int height) 
+
+
+void screen_reset(int width, int height) 
 {
+    // At least 4, if a texel should be bigger, then round to more
+    static int screen_round_to = max(max(PIX_W, PIX_H), 4);
+
     // Window dimensions must be aligned to multiple of 4 
     // because OpenGL doesn't correctly display textures with dimensions unaligned to 4
-    int round_to = 4;
-    if (width != SCR_WIDTH && width % round_to != 0) {
+    if (width != SCR_WIDTH && width % screen_round_to != 0) {
         if (width > SCR_WIDTH) {
-            width += round_to - width % round_to;
+            width += screen_round_to - width % screen_round_to;
         } else {
-            width -= width % round_to;
+            width -= width % screen_round_to;
         }
     }
 
-    if (height != SCR_HEIGHT && height % round_to != 0) {
+    if (height != SCR_HEIGHT && height % screen_round_to != 0) {
         if (height > SCR_HEIGHT) {
-            height += round_to - height % round_to;
+            height += screen_round_to - height % screen_round_to;
         } else {
-            height -= height % round_to;
+            height -= height % screen_round_to;
         }
     }
 
@@ -96,43 +73,35 @@ void update_tex_data(int width, int height)
     printf("Screen HEIGHT: %d\n", SCR_HEIGHT);
     printf("\n\n");
 
-    assert(sizeof(Pixel) == 3);
 
-    free(TEX_DATA);
-    TEX_DATA = malloc(SCR_WIDTH * SCR_HEIGHT * sizeof(Pixel));
-    assert(TEX_DATA != NULL);
-
-    Pixel magenta = {255, 0, 255};
-    // unsigned char magenta = 0b0;
-    // magenta |= 0b11; // blue
-    // magenta |= 0b000 << 2; // green
-    // magenta |= 0b111 << 5; // red
-
-    for (int h = 0; h < SCR_HEIGHT; ++h) {
-        for (int w = 0; w < SCR_WIDTH; ++w) {
-            TEX_DATA[w + h * SCR_WIDTH] = magenta;
-        }
-    }
+    //textureBuffer_reset(&tb, SCR_WIDTH / PIX_W, SCR_HEIGHT / PIX_H);
+    textureBuffer_reset(&tb, SCR_WIDTH, SCR_HEIGHT);
 }
 
 
 
 // glfw: whenever the window size changed (by OS or user resize) this callback function executes
 // ---------------------------------------------------------------------------------------------
-void framebuffer_size_callback(GLFWwindow* window, int width, int height)
+void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
     // make sure the viewport matches the new window dimensions; note that width and 
     // height will be significantly larger than specified on retina displays.
     glViewport(0, 0, width, height);
 
-    update_tex_data(width, height);
+    screen_reset(width, height);
 }
 
 
-void processInput(GLFWwindow* window) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
+static double MOUSE_X = 0;
+static double MOUSE_Y = 0;
+
+static void glfw_cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
+{
+    printf("Position: (%f:%f)\n", xpos, ypos);
+    MOUSE_X = xpos;
+    MOUSE_Y = ypos;
 }
+
 
 char* readShaderSource(const char* filepath) {
     
@@ -172,11 +141,214 @@ char* readShaderSource(const char* filepath) {
 }
 
 
+
+#define MAP_DIM 5
+
+static int MAP[MAP_DIM * MAP_DIM];
+//     1, 0, 0, 0, 1,
+//     1, 1, 0, 0, 1,
+//     1, 0, 0, 0, 1,
+//     1, 0, 0, 1, 1,
+//     1, 1, 0, 0, 0
+// };
+
+
+#define pix_x(x) ((x) / MAP_DIM * COLS)
+#define pix_y(y) ((y) / MAP_DIM * ROWS)
+
+#define map_x(x) ((x) / (float)COLS * MAP_DIM)
+#define map_y(y) ((y) / (float)ROWS * MAP_DIM)
+
+static const int TILE_SIZE = 1;
+
+static const int TILE_STEPS = 10;
+static const int NUM_STEPS = TILE_STEPS * MAP_DIM;
+static const int STEP = TILE_SIZE / TILE_STEPS;
+
+static const float dist_to_near_plane = 0.2; // equals to half plane width means 45 degree FOV
+static const float near_plane_width = 0.4;
+
+static const float stop_dist = 0.1;
+
+static const float mov_speed = 1;
+
+static Vec2 player = {2, 3};
+
+static Vec2 player_look_dir = {0, 1};
+
+
+
+
+void processInput(GLFWwindow* window, double delta_time) {
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        glfwSetWindowShouldClose(window, true);
+    }
+
+  
+}
+
+
+void Draw(int x, int y, Pixel pix) {
+    return;
+    textureBuffer_setPixel(&tb, x, y, pix);
+    printf("Set pixel at (%d,%d)\n", x, y);
+}
+
+int game_init() {
+    const char* filename = "../maps/00.txt";
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Failed to open file\n");
+        return -1;
+    }
+
+    int i = 0;
+
+    for(int row = 0; row < MAP_DIM; row++) {
+        for(int col = 0; col < MAP_DIM; col++) {
+            if(fscanf(file, "%d", &MAP[i]) != 1)
+            {
+                printf("Failed to read number at row %d, column %d\n", row, col);
+                return -1;
+            }
+            i++;
+        }
+    }
+
+    fclose(file);
+
+    for(int row = 0; row < MAP_DIM; row++) {
+        for(int col = 0; col < MAP_DIM; col++) {
+            printf("%d ", MAP[col + row * MAP_DIM]);
+        }
+        printf("\n");
+    }
+    return 0;
+}
+
+void gameLogic(double delta_time) {
+
+    float delta_x = 0; 
+    float delta_y = 0;
+
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_REPEAT) {
+        delta_y -= mov_speed * delta_time;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_REPEAT) {
+        delta_x -= mov_speed * delta_time;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_REPEAT) {
+        delta_y += mov_speed * delta_time;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_REPEAT) {
+        delta_x += mov_speed * delta_time;
+    }
+
+    player.x += delta_x;
+    player.y += delta_y;
+
+    Vec2 vpy = { pix_x(player.x), pix_x(player.y)};
+
+    player_look_dir.x = MOUSE_X - vpy.x;
+    player_look_dir.y = MOUSE_Y - vpy.y;
+
+    player_look_dir = vec2_normalized(player_look_dir);
+
+    Pixel pcol    = {255, 0, 0};
+    Pixel ldcol   = {255, 255, 0};
+    Pixel plcol   = {255, 0, 255};
+    Pixel raycol  = {0, 255, 0};
+    Pixel tilecol = {255, 0, 0};
+
+    Vec2 plane_dir = vec2_perpendicular(player_look_dir);
+    // Draw near clipping plane
+    int plane_width = 12;
+    int plane_dist = 5;
+
+    int supersampling = 16;
+    int ray_len = 300;
+    float ray_step = 0.1;
+    float stop_dist = 0.1;
+    for (int i = -plane_width/2; i < plane_width/2+1; ++i) {
+        // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
+
+        Vec2 plane_center = vec2_muli(player_look_dir, plane_dist);
+
+        Vec2 plane_dir_advanced = vec2_muli(plane_dir, i);
+
+        Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
+
+        Vec2 vpl = vec2_add(vpy, plane_next);
+
+        Draw(vpl.x, vpl.y, plcol);
+
+        if (i == plane_width/2+1) {
+            supersampling = 1;
+        }
+        for (int ss = 0; ss < supersampling; ++ss) {
+
+            float ssp = (float)ss / supersampling;
+            vpl = vec2_add(vpl, vec2_mulf(plane_dir, ssp));
+
+            //vpl += plane_dir * ((float)ss / supersampling);
+
+            Vec2 rayd = vec2_sub(vpl, vpy);
+            bool hit = false;
+            for (int j = 0; j < ray_len && !hit; ++j) {
+
+                //Vec2 rayp = vpy + rayd * j * ray_step;
+                Vec2 ray_dir_advanced = vec2_mulf(rayd, j*ray_step);
+                Vec2 rayp = vec2_add(vpy, ray_dir_advanced);
+
+                Draw(rayp.x, rayp.y, raycol);
+
+                Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
+                
+                int tile = MAP[(int)tilep.x + MAP_DIM * (int)tilep.y];
+                hit = tile != 0;
+                if (hit) { // hit
+                    Draw(rayp.x, rayp.y, tilecol);
+
+                    Vec2 dist_to_wall = vec2_sub(rayp, vpy);
+                    if (vec2_magnitude(dist_to_wall) < stop_dist) { // stop
+                        player.x -= delta_x;
+                        player.y -= delta_y;
+                    }
+                }
+            }
+        }
+    }
+
+
+    // Draw player
+    Draw(vpy.x, vpy.y, pcol);
+
+    Draw(vpy.x+1, vpy.y, pcol);
+    Draw(vpy.x, vpy.y+1, pcol);
+    Draw(vpy.x+1, vpy.y+1, pcol);
+
+    Draw(vpy.x-1, vpy.y, pcol);
+    Draw(vpy.x, vpy.y-1, pcol);
+    Draw(vpy.x-1, vpy.y-1, pcol);
+
+    Draw(vpy.x+1, vpy.y-1, pcol);
+    Draw(vpy.x-1, vpy.y+1, pcol);
+    
+    // Draw player look dir
+    for (int i = 0; i < 10; ++i) {
+        float ldx = vpy.x + player_look_dir.x * i;
+        float ldy = vpy.y + player_look_dir.y * i;
+
+        Draw(ldx, ldy, ldcol);
+    }
+
+}
+
 int main(void)
 {
-    update_tex_data(COLS, ROWS);
-    //makeCheckImage();
-
     glfwSetErrorCallback(glfw_error_callback);
 
     // glfw: initialize and configure
@@ -192,7 +364,7 @@ int main(void)
 
     // glfw window creation
     // --------------------
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Oh sh*t, here we go again...", NULL, NULL);
+    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Oh sh*t, here we go again...", NULL, NULL);
     if (window == NULL)
     {
         printf("Failed to create GLFW window\n");
@@ -200,7 +372,8 @@ int main(void)
         return -1;
     }
     glfwMakeContextCurrent(window);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
+    glfwSetCursorPosCallback(window, glfw_cursor_position_callback);
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
@@ -209,6 +382,14 @@ int main(void)
         printf("Failed to initialize GLAD\n");
         return -1;
     }
+
+    
+    // textureBuffer_init(&tb, COLS, ROWS);
+    // textureBuffer_reset(&tb, COLS, ROWS);
+
+    textureBuffer_init(&tb, SCR_WIDTH, SCR_HEIGHT);
+    textureBuffer_reset(&tb, SCR_WIDTH, SCR_HEIGHT);
+
 
 #if 1
     const char* vs = "../shaders/shader.vs";
@@ -225,7 +406,7 @@ int main(void)
 
     // vertex shader
     unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertex_source, NULL);
+    glShaderSource(vertexShader, 1, (const char**)&vertex_source, NULL);
     glCompileShader(vertexShader);
     // check for shader compile errors
     int success;
@@ -239,7 +420,7 @@ int main(void)
 
         // fragment shader
     unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragment_source, NULL);
+    glShaderSource(fragmentShader, 1, (const char**)&fragment_source, NULL);
     glCompileShader(fragmentShader);
     // check for shader compile errors
     glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
@@ -318,19 +499,31 @@ int main(void)
 
 
 
+    // unsigned int framebuffer;
+    // glGenFramebuffers(1, &framebuffer);
+    // glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);    
+
+
+
     // load and create a texture 
     // -------------------------
-    unsigned int texture1;
-    // texture 1
-    // ---------
-    glGenTextures(1, &texture1);
-    glBindTexture(GL_TEXTURE_2D, texture1); 
+
+    glGenTextures(1, &tb.gl_tex_id);
+    glBindTexture(GL_TEXTURE_2D, tb.gl_tex_id); 
      // set the texture wrapping parameters
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     // set texture filtering parameters
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, tb.width, tb.height, 0, GL_RGB, GL_UNSIGNED_BYTE, tb.data);
+
+    tb.gl_tex_init = true;
+
+
+    //glBindTexture(GL_TEXTURE_2D, 0);
+    //textureBuffer_loadTexData(&tb);
 
     
    
@@ -346,27 +539,58 @@ int main(void)
     // uncomment this call to draw in wireframe polygons.
     //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
+    if (game_init() != 0) {
+        return -1;
+    }
+
     // render loop
     // -----------
     while (!glfwWindowShouldClose(window))
     {
+        static double delta_time;
+
+        clock_t start = clock();
+
         // input
         // -----
-        processInput(window);
+        processInput(window, delta_time);
+
+        gameLogic(delta_time);
 
         // render
         // ------
-        //glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+
+        
+
+        for (int h = 0; h < tb.height; ++h) {
+            for (int w = 0; w < tb.width; ++w) {
+                //Pixel p = {rand() % 256, rand() % 256, rand() % 256};
+
+                Pixel p = {1, 1, 0};
+                Pixel p1 = {0, 1, 1};
+                if (w > tb.width/2) {
+                    tb.data[w + h * tb.width] = p;
+                } else {
+                    //tb.data[w + h * tb.width] = p1;
+                }
+            }
+        }
+
+        textureBuffer_loadTexData(&tb);
 
 #if 1
         // bind textures on corresponding texture units
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture1);
+        glBindTexture(GL_TEXTURE_2D, tb.gl_tex_id);
 
         // render tex data on texture 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, TEX_DATA);
-        glGenerateMipmap(GL_TEXTURE_2D);
+        // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, TEX_DATA);
+        // glGenerateMipmap(GL_TEXTURE_2D);
+
+
+
 
 
 
@@ -394,6 +618,11 @@ int main(void)
         // -------------------------------------------------------------------------------
         glfwSwapBuffers(window);
         glfwPollEvents();
+
+        clock_t end = clock();
+
+        delta_time = ((double) (end - start)) / CLOCKS_PER_SEC;
+        //printf("Delta time: %f\n", delta_time);
     }
 
 #if 0

@@ -30,6 +30,14 @@ Vec2 vec2_add(Vec2 v, Vec2 vv) {
     return (Vec2){ v.x+vv.x, v.y+vv.y };
 }
 
+Vec2 vec2_addi(Vec2 v, int i) {
+    return (Vec2){ v.x+i, v.y+i };
+}
+
+Vec2 vec2_addf(Vec2 v, int f) {
+    return (Vec2){ v.x+f, v.y+f };
+}
+
 
 Vec2 vec2_sub(Vec2 v, Vec2 vv) {
     return (Vec2){ v.x-vv.x, v.y-vv.y };
@@ -42,6 +50,10 @@ Vec2 vec2_subf(Vec2 v, float f) {
 
 Vec2 vec2_mul(Vec2 v, Vec2 vv) {
     return (Vec2){ v.x*vv.x, v.y*vv.y };
+}
+
+Vec2 vec2_muli(Vec2 v, int i) {
+    return (Vec2){ v.x*i, v.y*i };
 }
 
 Vec2 vec2_mulf(Vec2 v, float f) {
