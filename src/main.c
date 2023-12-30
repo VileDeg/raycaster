@@ -316,16 +316,17 @@ void gameLogic(double delta_time) {
     int plane_width = 12;
     int plane_dist = 5;
 
-    int supersampling = 16;
+    int supersampling = 4;
+    float i_step = 1 / (float)supersampling;
     int ray_len = 300;
     float ray_step = 0.1;
     float stop_dist = 0.1;
-    for (int i = -plane_width/2; i < plane_width/2+1; ++i) {
+    for (float i = -plane_width/2; i < plane_width/2+1; i += i_step) {
         // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
 
         Vec2 plane_center = vec2_muli(player_look_dir, plane_dist);
 
-        Vec2 plane_dir_advanced = vec2_muli(plane_dir, i);
+        Vec2 plane_dir_advanced = vec2_mulf(plane_dir, i);
 
         Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
 
@@ -333,38 +334,27 @@ void gameLogic(double delta_time) {
 
         Draw(vpl.x, vpl.y, plcol);
 
-        if (i == plane_width/2+1) {
-            supersampling = 1;
-        }
-        for (int ss = 0; ss < supersampling; ++ss) {
+        Vec2 rayd = vec2_sub(vpl, vpy);
+        bool hit = false;
+        for (int j = 0; j < ray_len && !hit; ++j) {
 
-            float ssp = (float)ss / supersampling;
-            vpl = vec2_add(vpl, vec2_mulf(plane_dir, ssp));
+            //Vec2 rayp = vpy + rayd * j * ray_step;
+            Vec2 ray_dir_advanced = vec2_mulf(rayd, j*ray_step);
+            Vec2 rayp = vec2_add(vpy, ray_dir_advanced);
 
-            //vpl += plane_dir * ((float)ss / supersampling);
+            Draw(rayp.x, rayp.y, raycol);
 
-            Vec2 rayd = vec2_sub(vpl, vpy);
-            bool hit = false;
-            for (int j = 0; j < ray_len && !hit; ++j) {
-
-                //Vec2 rayp = vpy + rayd * j * ray_step;
-                Vec2 ray_dir_advanced = vec2_mulf(rayd, j*ray_step);
-                Vec2 rayp = vec2_add(vpy, ray_dir_advanced);
-
-                Draw(rayp.x, rayp.y, raycol);
-
-                Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
+            Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
                 
-                int tile = MAP[(int)tilep.x + MAP_DIM * (int)tilep.y];
-                hit = tile != 0;
-                if (hit) { // hit
-                    Draw(rayp.x, rayp.y, tilecol);
+            int tile = MAP[(int)tilep.x + MAP_DIM * (int)tilep.y];
+            hit = tile != 0;
+            if (hit) { // hit
+                Draw(rayp.x, rayp.y, tilecol);
 
-                    Vec2 dist_to_wall = vec2_sub(rayp, vpy);
-                    if (vec2_magnitude(dist_to_wall) < stop_dist) { // stop
-                        player.x -= delta_x;
-                        player.y -= delta_y;
-                    }
+                Vec2 dist_to_wall = vec2_sub(rayp, vpy);
+                if (vec2_magnitude(dist_to_wall) < stop_dist) { // stop
+                    player.x -= delta_x;
+                    player.y -= delta_y;
                 }
             }
         }
