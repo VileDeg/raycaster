@@ -33,3 +33,12 @@
 
 
 build/
+Debug/
+CMakeFiles/
+rayc.dir/
+x64/
+*.cmake
+CMakeCache.txt
+.vs/
+*.vcxproj*
+

@@ -7,7 +7,7 @@ project (Raycaster)
 
 set(MYEXEC rayc)
 set(SRC_DIR ./src)
-set(SOURCES ${SRC_DIR}/main.c ${SRC_DIR}/glad.c ${SRC_DIR}/vec2.h ${SRC_DIR}/texture_buffer.h)
+set(SOURCES ${SRC_DIR}/main.c ${SRC_DIR}/glad.c ${SRC_DIR}/vec2.h ${SRC_DIR}/texture_buffer.h ${SRC_DIR}/game_map.h)
 
 add_executable(${MYEXEC} ${SOURCES})
 

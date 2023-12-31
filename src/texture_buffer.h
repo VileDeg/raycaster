@@ -25,6 +25,8 @@ typedef struct {
     Pixel* data;
 } TextureBuffer;
 
+void textureBuffer_clear(TextureBuffer* tb, Pixel col);
+
 void textureBuffer_init(TextureBuffer* tb, int width, int height) {
     memset(tb, 0, sizeof(TextureBuffer));
     tb->data = NULL;
@@ -32,6 +34,21 @@ void textureBuffer_init(TextureBuffer* tb, int width, int height) {
     tb->updated_this_frame = false;
     tb->width = width;
     tb->height = height;
+
+    assert(sizeof(Pixel) == 3);
+
+    void* tmp = malloc(tb->width * tb->height * sizeof(Pixel));
+    if (tmp == NULL) {
+        perror("Fatal error: malloc failed");
+        exit(1);
+    }
+    tb->data = tmp;
+
+    assert(sizeof(Pixel) == 3);
+
+    Pixel magenta = { 255, 0, 255 };
+
+    textureBuffer_clear(tb, magenta);
 }
 
 void textureBuffer_clear(TextureBuffer* tb, Pixel col) {
@@ -41,6 +58,7 @@ void textureBuffer_clear(TextureBuffer* tb, Pixel col) {
         }
     }
 }
+
 
 void textureBuffer_reset(TextureBuffer* tb, int width, int height) {
     tb->width = width;

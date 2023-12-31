@@ -11,6 +11,7 @@
 
 #include "vec2.h"
 #include "texture_buffer.h"
+#include "game_map.h"
 
 static int ROWS = 128;
 static int COLS = 128;
@@ -24,6 +25,8 @@ static int SCR_HEIGHT;
 
 GLFWwindow* window = NULL;
 static TextureBuffer tb;
+
+static GameMap gm;
 
 static Pixel CLEAR_COLOR;
 
@@ -92,7 +95,7 @@ static double MOUSE_Y_TEX_SPACE = 0;
 
 static void glfw_cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 {
-    printf("Position: (%f:%f)\n", xpos, ypos);
+    //printf("Position: (%f:%f)\n", xpos, ypos);
     MOUSE_X_SCREEN_SPACE = xpos;
     MOUSE_Y_SCREEN_SPACE = ypos;
 
@@ -138,20 +141,12 @@ char* readShaderSource(const char* filepath) {
     return buffer;
 }
 
-#define MAP_DIM 5
-
-static int MAP[MAP_DIM * MAP_DIM];
-
-#define pix_x(x) ((x) / MAP_DIM * COLS)
-#define pix_y(y) ((y) / MAP_DIM * ROWS)
-
-#define map_x(x) ((x) / (float)COLS * MAP_DIM)
-#define map_y(y) ((y) / (float)ROWS * MAP_DIM)
-
 #define TILE_SIZE 1
 
 #define TILE_STEPS 10
-static const int NUM_STEPS = TILE_STEPS * MAP_DIM;
+
+static int NUM_STEPS;
+
 static const int STEP = TILE_SIZE / TILE_STEPS;
 
 static const float dist_to_near_plane = 0.2; // equals to half plane width means 45 degree FOV
@@ -159,7 +154,7 @@ static const float near_plane_width = 0.4;
 
 static const float stop_dist = 0.1;
 
-static const float mov_speed = 1;
+static const float mov_speed = 3;
 
 static Vec2 player = {2, 3};
 
@@ -242,37 +237,12 @@ void processInput(GLFWwindow* window, double delta_time) {
 //    printf("Set pixel at (%d,%d)\n", x, y);
 //}
 
-int game_init() {
-    const char* filename = "../maps/00.txt";
-    FILE* file = fopen(filename, "r");
-    if (file == NULL) {
-        printf("Failed to open file\n");
-        return -1;
-    }
 
-    int i = 0;
+#define pix_x(x) ((x) / gm.dim * COLS)
+#define pix_y(y) ((y) / gm.dim * ROWS)
 
-    for(int row = 0; row < MAP_DIM; row++) {
-        for(int col = 0; col < MAP_DIM; col++) {
-            if(fscanf(file, "%d", &MAP[i]) != 1)
-            {
-                printf("Failed to read number at row %d, column %d\n", row, col);
-                return -1;
-            }
-            i++;
-        }
-    }
-
-    fclose(file);
-
-    for(int row = 0; row < MAP_DIM; row++) {
-        for(int col = 0; col < MAP_DIM; col++) {
-            printf("%d ", MAP[col + row * MAP_DIM]);
-        }
-        printf("\n");
-    }
-    return 0;
-}
+#define map_x(x) ((x) / (float)COLS * gm.dim)
+#define map_y(y) ((y) / (float)ROWS * gm.dim)
 
 void gameLogic(double delta_time) {
 
@@ -321,6 +291,9 @@ void gameLogic(double delta_time) {
     int ray_len = 300;
     float ray_step = 0.1;
     float stop_dist = 0.1;
+
+    bool player_stop = false;
+
     for (float i = -plane_width/2; i < plane_width/2+1; i += i_step) {
         // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
 
@@ -335,6 +308,7 @@ void gameLogic(double delta_time) {
         Draw(vpl.x, vpl.y, plcol);
 
         Vec2 rayd = vec2_sub(vpl, vpy);
+        
         bool hit = false;
         for (int j = 0; j < ray_len && !hit; ++j) {
 
@@ -346,20 +320,22 @@ void gameLogic(double delta_time) {
 
             Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
                 
-            int tile = MAP[(int)tilep.x + MAP_DIM * (int)tilep.y];
+            int tile = gm.map[(int)tilep.x + gm.dim * (int)tilep.y];
             hit = tile != 0;
-            if (hit) { // hit
+            if (hit) {
                 Draw(rayp.x, rayp.y, tilecol);
-
                 Vec2 dist_to_wall = vec2_sub(rayp, vpy);
                 if (vec2_magnitude(dist_to_wall) < stop_dist) { // stop
-                    player.x -= delta_x;
-                    player.y -= delta_y;
+                    player_stop = true;
                 }
             }
         }
     }
 
+    if (player_stop) { // hit
+        player.x -= delta_x;
+        player.y -= delta_y;
+    }
 
     // Draw player
     Draw(vpy.x, vpy.y, pcol);
@@ -382,11 +358,13 @@ void gameLogic(double delta_time) {
 
         Draw(ldx, ldy, ldcol);
     }
-
 }
 
 
-int openglInit()
+static unsigned int VAO, VBO, EBO;
+static unsigned int shaderProgram;
+
+int opengl_init()
 {
     glfwSetErrorCallback(glfw_error_callback);
 
@@ -405,7 +383,7 @@ int openglInit()
 
     // glfw window creation
     // --------------------
-    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Oh sh*t, here we go again...", NULL, NULL);
+    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Raycaster", NULL, NULL);
     if (window == NULL)
     {
         printf("Failed to create GLFW window\n");
@@ -437,24 +415,11 @@ int openglInit()
         printf("Error: debug output was not enabled!\n");
     }
 
-    return 0;
-}
 
-int main(void)
-{
-    SCR_WIDTH = COLS * PIX_W;
-    SCR_HEIGHT = ROWS * PIX_H;
+    // ----------------------------
 
-    if (openglInit() != 0) {
-        return -1;
-    }
-
-    textureBuffer_init(&tb, COLS, ROWS);
-    textureBuffer_reset(&tb, COLS, ROWS);
-
-#if 1
-    const char* vs = "../shaders/shader.vs";
-    const char* fs = "../shaders/shader.fs";
+    const char* vs = "shaders/shader.vs";
+    const char* fs = "shaders/shader.fs";
 
     char* vertex_source = readShaderSource(vs);
     if (vertex_source == NULL) {
@@ -492,7 +457,7 @@ int main(void)
     }
 
     // link shaders
-    unsigned int shaderProgram = glCreateProgram();
+    shaderProgram = glCreateProgram();
     glAttachShader(shaderProgram, vertexShader);
     glAttachShader(shaderProgram, fragmentShader);
     glLinkProgram(shaderProgram);
@@ -508,7 +473,7 @@ int main(void)
     free(vertex_source);
     free(fragment_source);
 
-  
+
     // set up vertex data (and buffer(s)) and configure vertex attributes
     // ------------------------------------------------------------------
     float vertices[] = {
@@ -518,7 +483,7 @@ int main(void)
         -1.f, -1.f, 0.0f,   0.0f, 0.0f, // bottom left
         -1.f,  1.f, 0.0f,   0.0f, 1.0f  // top left 
     };
- 
+
 
     unsigned int indices[] = {  // note that we start from 0!
         0, 1, 3,  // first Triangle
@@ -526,7 +491,6 @@ int main(void)
     };
 
 
-    unsigned int VBO, VAO, EBO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
     glGenBuffers(1, &EBO);
@@ -534,41 +498,40 @@ int main(void)
     // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
     glBindVertexArray(VAO);
 
-        glBindBuffer(GL_ARRAY_BUFFER, VBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
-        int stride = 5 * sizeof(float);
+    int stride = 5 * sizeof(float);
 
-        // Position
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
-        glEnableVertexAttribArray(0);
+    // Position
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
+    glEnableVertexAttribArray(0);
 
-        // Tex coords
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
+    // Tex coords
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
 
-        // note that this is allowed, the call to glVertexAttribPointer registered VBO as the vertex attribute's bound vertex buffer object so afterwards we can safely unbind
-        glBindBuffer(GL_ARRAY_BUFFER, 0); 
+    // note that this is allowed, the call to glVertexAttribPointer registered VBO as the vertex attribute's bound vertex buffer object so afterwards we can safely unbind
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-        // remember: do NOT unbind the EBO while a VAO is active as the bound element buffer object IS stored in the VAO; keep the EBO bound.
-        //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    // remember: do NOT unbind the EBO while a VAO is active as the bound element buffer object IS stored in the VAO; keep the EBO bound.
+    //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
     // You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
     // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
-    glBindVertexArray(0); 
+    glBindVertexArray(0);
 
 
 
     // load and create a texture 
     // -------------------------
 
-#if 1
     glGenTextures(1, &tb.gl_tex_id);
-    glBindTexture(GL_TEXTURE_2D, tb.gl_tex_id); 
-     // set the texture wrapping parameters
+    glBindTexture(GL_TEXTURE_2D, tb.gl_tex_id);
+    // set the texture wrapping parameters
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     // set texture filtering parameters
@@ -578,24 +541,76 @@ int main(void)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, tb.width, tb.height, 0, GL_RGB, GL_UNSIGNED_BYTE, tb.data);
 
     tb.gl_tex_init = true;
-#endif
-    
-   
+
+
     // tell opengl for each sampler to which texture unit it belongs to (only has to be done once)
     // -------------------------------------------------------------------------------------------
     glUseProgram(shaderProgram); // don't forget to activate/use the shader before setting uniforms!
     // either set it manually like so:
     glUniform1i(glGetUniformLocation(shaderProgram, "texture1"), 0);
 
-#endif
     // uncomment this call to draw in wireframe polygons.
     //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-#if 1
-    if (game_init() != 0) {
+    return 0;
+}
+
+void opengl_cleanup()
+{
+    glDeleteVertexArrays(1, &VAO);
+    glDeleteBuffers(1, &VBO);
+    glDeleteBuffers(1, &EBO);
+    glDeleteProgram(shaderProgram);
+}
+
+
+
+void game_loop(double delta_time)
+{
+    tb.updated_this_frame = false;
+    textureBuffer_clear(&tb, CLEAR_COLOR);
+    textureBuffer_loadTexData(&tb);
+
+
+    processInput(window, delta_time);
+    gameLogic(delta_time);
+
+    // render
+    // ------
+    /*glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);*/
+
+    if (tb.updated_this_frame) {
+        textureBuffer_loadTexData(&tb);
+    }
+
+    // draw
+    glUseProgram(shaderProgram);
+    glBindVertexArray(VAO); // seeing as we only have a single VAO there's no need to bind it every time, but we'll do so to keep things a bit more organized
+    //glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+}
+
+int main(void)
+{
+    SCR_WIDTH = COLS * PIX_W;
+    SCR_HEIGHT = ROWS * PIX_H;
+
+    NUM_STEPS = TILE_STEPS * gm.dim;
+
+    textureBuffer_init(&tb, COLS, ROWS);
+    //textureBuffer_reset(&tb, COLS, ROWS);
+
+    if (opengl_init() != 0) {
         return -1;
     }
-#endif
+
+    
+
+
+    if (gameMap_init(&gm, "maps/00.txt") != 0) {
+        return -1;
+    }
 
     CLEAR_COLOR.r = 0;
     CLEAR_COLOR.g = 0;
@@ -611,43 +626,8 @@ int main(void)
 
         clock_t start = clock();
 
-        tb.updated_this_frame = false;
-        textureBuffer_clear(&tb, CLEAR_COLOR);
-        textureBuffer_loadTexData(&tb);
-#if 1
-        processInput(window, delta_time);
-        gameLogic(delta_time);
-#endif
-
-        // render
-        // ------
-        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        //Pixel prp = tb.data[(int)MOUSE_X + (int)MOUSE_Y * tb.width];
-        //printf("Cursor color: %d, %d, %d\n", prp.r, prp.g, prp.b);
-
-#if 1
-        // bind textures on corresponding texture units
-
-    #if 1
-        //glActiveTexture(GL_TEXTURE0);
-            //glBindTexture(GL_TEXTURE_2D, tb.gl_tex_id);
-
-
-        if (tb.updated_this_frame) {
-            
-            textureBuffer_loadTexData(&tb);
-        }
-    #endif
-
-        // draw
-        glUseProgram(shaderProgram);
-        glBindVertexArray(VAO); // seeing as we only have a single VAO there's no need to bind it every time, but we'll do so to keep things a bit more organized
-        //glDrawArrays(GL_TRIANGLES, 0, 6);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        game_loop(delta_time);
         // glBindVertexArray(0); // no need to unbind it every time 
-#endif 
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -660,14 +640,9 @@ int main(void)
         //printf("Delta time: %f\n", delta_time);
     }
 
-#if 1
     // optional: de-allocate all resources once they've outlived their purpose:
     // ------------------------------------------------------------------------
-    glDeleteVertexArrays(1, &VAO);
-    glDeleteBuffers(1, &VBO);
-    glDeleteBuffers(1, &EBO);
-    glDeleteProgram(shaderProgram);
-#endif    
+    opengl_cleanup();
 
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
