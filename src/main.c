@@ -190,7 +190,7 @@ static void glfw_cursor_position_callback(GLFWwindow* window, double xpos, doubl
     MOUSE_DELTA_X = xpos - prev_x;
     MOUSE_DELTA_Y = ypos - prev_y;
 
-    printf("Delta_X: (%lf)\n", MOUSE_DELTA_X);
+    //printf("Delta_X: (%lf)\n", MOUSE_DELTA_X);
 
     
 
@@ -248,10 +248,10 @@ static int NUM_STEPS;
 //static const float near_plane_width = 0.4;
 
 
-static const int plane_width = 12;
-static const int plane_dist = 5;
+static float plane_width;
+static float plane_dist = 4;
 
-static const int supersampling = 4;
+//static const int supersampling = 32;
 
 static const float stop_dist = 0.1;
 
@@ -268,16 +268,29 @@ static Pixel BLUE  = { 0, 0, 255 };
 
 static Pixel YELLOW = { 255, 255, 0 };
 static Pixel MAGENTA = { 255, 0, 255 };
+static Pixel CYAN = { 0, 255, 255 };
 
 static Pixel PLAYER_COLOR;
 static Pixel NEAREST_PLANE_COLOR;
+
+#define M_PI   3.14159265358979323846264338327950288
+
+#define degToRad(angleInDegrees) ((angleInDegrees) * M_PI / 180.0)
+#define radToDeg(angleInRadians) ((angleInRadians) * 180.0 / M_PI)
 
 void globals_Init()
 {
     PLAYER_COLOR = RED;
     NEAREST_PLANE_COLOR = MAGENTA;
 
-    POV_COLS = plane_width * supersampling;
+
+    
+    // to get 45 degree POV
+    plane_width = plane_dist * tan(degToRad(22.5)) * 2;
+
+
+    //POV_COLS = plane_width * supersampling;
+    POV_COLS = 128;
     POV_ROWS = POV_COLS;
 
     int half_screen_w = TOP_VIEW_COLS * TOP_VIEW_PIX_W;
@@ -380,8 +393,6 @@ void gameLogic(double delta_time) {
         delta_x += mov_speed * delta_time;
     }
 
-  
-
     Vec2 player_pos_pixel_space = { pix_x(player.x), pix_x(player.y)};
 
     /*player_look_dir.x = MOUSE_X_TEX_SPACE - player_pos_pixel_space.x;
@@ -402,7 +413,9 @@ void gameLogic(double delta_time) {
     Vec2 addx = vec2_mulf(plane_dir, delta_x);
     Vec2 addy = vec2_mulf(player_look_dir, -delta_y);
 
-    player = vec2_add(player, vec2_add(addx, addy));
+    Vec2 player_delta_pos = vec2_add(addx, addy);
+
+    player = vec2_add(player, player_delta_pos);
 
     /*player.x += ;
     player.y += delta_y;*/
@@ -422,11 +435,13 @@ void gameLogic(double delta_time) {
     //int num_rays = plane_width * supersampling;
     int num_rays = POV_COLS;
     
-    float i_step = 1 / (float)supersampling;
-    int ray_len = 300;
+    //float i_step = 1 / (float)supersampling;
     //int ray_len = 50;
     float ray_step = 0.1;
-    float stop_dist = 0.1;
+    int num_ray_steps = TOP_VIEW_ROWS / ray_step;
+
+    int player_view_dist = TOP_VIEW_ROWS;
+    float stop_dist = 5;
 
     bool player_stop = false;
 
@@ -443,32 +458,43 @@ void gameLogic(double delta_time) {
 
         Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
 
-        Vec2 vpl = vec2_add(player_pos_pixel_space, plane_next);
+        Vec2 ray_origin = vec2_add(player_pos_pixel_space, plane_next);
 
         //Draw(vpl.x, vpl.y, nearest_plane_col);
 
-        Vec2 rayd = vec2_sub(vpl, player_pos_pixel_space);
+        Vec2 rayd = vec2_sub(ray_origin, player_pos_pixel_space);
+
+        rayd = vec2_normalized(rayd);
+        
         
         bool hit = false;
-        for (int j = 0; j < ray_len && !hit; ++j) {
+        int j = 0;
+        for (; j < num_ray_steps && !hit; ++j) {
 
             //Vec2 rayp = vpy + rayd * j * ray_step;
             Vec2 ray_dir_advanced = vec2_mulf(rayd, j*ray_step);
-            Vec2 rayp = vec2_add(player_pos_pixel_space, ray_dir_advanced);
+            //Vec2 rayp = vec2_add(player_pos_pixel_space, ray_dir_advanced);
+            Vec2 rayp = vec2_add(ray_origin, ray_dir_advanced);
 
-            if (rayp.x < 0.f || rayp.y < 0.f) {
-                break;
-            }
+            
 
             drawTopView(rayp.x, rayp.y, raycol);
 
 
             Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
-            assert(tilep.x < 11 && tilep.y < 11);
-            assert(tilep.x > -1 && tilep.y > -1);
+
 
             int tile_x = tilep.x;
             int tile_y = tilep.y;
+
+            // Don't go out of map bounds
+            if (tile_x < 0.f || tile_y < 0.f ||
+                tile_x > gm.dim || tile_y > gm.dim) {
+                break;
+            }
+
+            assert(tile_x >= 0 && tile_x <= gm.dim);
+            assert(tile_y >= 0 && tile_y <= gm.dim);
                 
             int tile = gm.map[tile_x + gm.dim * tile_y];
             hit = tile != 0;
@@ -478,23 +504,34 @@ void gameLogic(double delta_time) {
                 //int pov_y = POV_ROWS / 2;
                 
 
-                Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
+                //Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
+                Vec2 player_to_wall = vec2_sub(rayp, ray_origin);
                 float dist_to_wall = vec2_magnitude(player_to_wall);
-                if (dist_to_wall < stop_dist) { // stop
-                    player_stop = true;
-                }
+                //if (dist_to_wall < stop_dist) { // stop
+                //    player_stop = true;
+                //}
 
                 
 
-                int height = POV_ROWS - dist_to_wall / TOP_VIEW_COLS * POV_ROWS;
+                float ratio = dist_to_wall / player_view_dist;
+                //float pw = 2.5;
+                //float factor = pow(pw, 1+ratio) - pw;
+                float factor = ratio;
+
+                //float pw = 2.5;
+                //float ratio = pow(pw, dist_to_wall) / player_view_dist;
+                ////float factor = pow(pw, 1 + ratio) - pw;
+                //float factor = ratio;
+
+                int height = POV_ROWS - factor * POV_ROWS;
                 int half_h = height / 2;
 
                 int half_r = POV_ROWS / 2;
 
                 float brightness = height / (float)POV_ROWS;
-                // Floow
+                // Floor
                 for (int y = 0; y < half_r - half_h + 1; ++y) {
-                    drawPov(i, y, pixel_mulf(floorcol, brightness));
+                    drawPov(i, y, pixel_mulf(floorcol, 1));
                 }
                 // Wall
                 for (int y = half_r - half_h; y < half_r + half_h + 1; ++y) {
@@ -502,22 +539,108 @@ void gameLogic(double delta_time) {
                 }
                 // Ceilling
                 for (int y = half_r + half_h + 1; y < POV_ROWS; ++y) {
-                    drawPov(i, y, pixel_mulf(ceilcol, brightness));
+                    drawPov(i, y, pixel_mulf(ceilcol, 1));
                 }
+            }
+        }
+        // Hit nothing
+        //if (j >= ray_len) {
+        if (!hit) {
+            /*Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
+            float dist_to_wall = vec2_magnitude(player_to_wall);*/
+            //if (dist_to_wall < stop_dist) { // stop
+            //    player_stop = true;
+            //}
+
+
+
+            //int height = POV_ROWS - dist_to_wall / TOP_VIEW_COLS * POV_ROWS;
+            //int height = POV_ROWS - dist_to_wall / ray_len * POV_ROWS;
+            int height = 0;
+            int half_h = height / 2;
+
+            int half_r = POV_ROWS / 2;
+
+            float brightness = height / (float)POV_ROWS;
+            // Floor
+            for (int y = 0; y < half_r - half_h + 1; ++y) {
+                drawPov(i, y, pixel_mulf(floorcol, 1));
+            }
+            // Wall
+            /*for (int y = half_r - half_h; y < half_r + half_h + 1; ++y) {
+                drawPov(i, y, pixel_mulf(wallcol, brightness));
+            }*/
+            // Ceilling
+            for (int y = half_r + half_h + 1; y < POV_ROWS; ++y) {
+                drawPov(i, y, pixel_mulf(ceilcol, 1));
             }
         }
     }
 
-    if (player_stop) { // hit
-        player.x -= delta_x;
-        player.y -= delta_y;
+
+
+
+    // Cast a ray in the direction the player is moving to detect collision with wall
+#if 1
+    Vec2 player_move_dir = vec2_normalized(player_delta_pos);
+
+    Pixel collision_ray_col = CYAN;
+    int collision_ray_len = stop_dist * 10;
+
+    Vec2 rayd = player_move_dir;
+
+   
+
+    //printf("Moving in dir (%f, %f)   %f\n", rayd.x, rayd.y, vec2_magnitude(rayd));
+
+    bool hit = false;
+    for (int j = 0; j < collision_ray_len && !hit; ++j) {
+
+        Vec2 ray_dir_advanced = vec2_mulf(rayd, j * ray_step);
+        Vec2 rayp = vec2_add(player_pos_pixel_space, ray_dir_advanced);
+
+        if (rayp.x < 0.f || rayp.y < 0.f) {
+            break;
+        }
+
+        drawTopView(rayp.x, rayp.y, collision_ray_col);
+
+
+        Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
+        assert(tilep.x < 11 && tilep.y < 11);
+        assert(tilep.x > -1 && tilep.y > -1);
+
+        int tile_x = tilep.x;
+        int tile_y = tilep.y;
+
+        int tile = gm.map[tile_x + gm.dim * tile_y];
+        hit = tile != 0;
+        if (hit) {
+            //drawTopView(rayp.x, rayp.y, wallcol);
+
+            //int pov_y = POV_ROWS / 2;
+
+
+            Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
+            float dist_to_wall = vec2_magnitude(player_to_wall);
+            if (dist_to_wall < stop_dist) { // stop
+                player_stop = true;
+            }
+        }
     }
+
+#endif
+
+    if (player_stop) { // hit
+        player = vec2_sub(player, vec2_mulf(player_delta_pos, 1.1));
+    }
+
 
     // Draw player
     drawPlayer(player_pos_pixel_space);
-    
+
     drawNearestPlane(player_pos_pixel_space, player_look_dir);
-    
+
     // Draw player look dir
     for (int i = 0; i < 10; ++i) {
         float ldx = player_pos_pixel_space.x + player_look_dir.x * i;
@@ -525,6 +648,8 @@ void gameLogic(double delta_time) {
 
         drawTopView(ldx, ldy, ldcol);
     }
+
+
 }
 
 static unsigned int VAO, VBO, EBO;
@@ -559,6 +684,8 @@ int opengl_init()
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
     glfwSetCursorPosCallback(window, glfw_cursor_position_callback);
+
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
@@ -804,7 +931,6 @@ int main(void)
 {
     globals_Init();
 
-    
 
     textureBuffer_init(&top_view_tb, TOP_VIEW_COLS, TOP_VIEW_ROWS);
     textureBuffer_init(&pov_tb, POV_COLS, POV_ROWS);

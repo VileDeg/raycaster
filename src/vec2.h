@@ -15,8 +15,14 @@ float vec2_magnitude(Vec2 v) {
     return sqrt(v.x * v.x + v.y * v.y);
 }
 
+#define eps 0.000001f
+
 Vec2 vec2_normalized(Vec2 v) {
     float mag = sqrt(v.x * v.x + v.y * v.y);
+    // Avoid dividing by zero. If vector is (0, 0) do nothing
+    if (fabs(v.x - 0.f) < eps && fabs(v.y - 0.f) < eps) {
+        return v;
+    }
     return (Vec2){ v.x/mag, v.y/mag };
 }
 
