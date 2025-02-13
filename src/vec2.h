@@ -5,7 +5,6 @@
 #include <stdio.h>
 
 #define _vec2_buf_len 16
-static char _vec2_buf[_vec2_buf_len];
 
 typedef struct {
     float x, y;
@@ -81,6 +80,8 @@ Vec2 vec2_fdiv(float f, Vec2 v) {
 
 
 char* vec2_str(Vec2 v) {
+    static char _vec2_buf[_vec2_buf_len];
+
     snprintf(_vec2_buf, _vec2_buf_len, "(%.2f, %.2f)", v.x, v.y);
     return _vec2_buf;
 }

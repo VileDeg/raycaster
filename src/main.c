@@ -17,19 +17,106 @@
 #define TOP_VIEW_PIX_W 4
 #define TOP_VIEW_PIX_H 4
 
-static int POV_PIX_W;
-static int POV_PIX_H;
 
-static int TOP_VIEW_ROWS = 128;
-static int TOP_VIEW_COLS = 128;
+#define M_PI   3.14159265358979323846264338327950288
 
-static int POV_ROWS;
-static int POV_COLS;
+#define degToRad(angleInDegrees) ((angleInDegrees) * M_PI / 180.0)
+#define radToDeg(angleInRadians) ((angleInRadians) * 180.0 / M_PI)
 
 
+/*
+* tv - top view (TV), left
+* pov - first person view (POV), right
+* map - integer coordinates in map
+*/
 
-static int SCR_WIDTH;
-static int SCR_HEIGHT;
+#define map_to_tv_x(x) ((x) / gm.dim * scr.TOP_VIEW_COLS)
+#define map_to_tv_y(y) ((y) / gm.dim * scr.TOP_VIEW_ROWS)
+
+#define tv_to_map_x(x) ((x) / (float)scr.TOP_VIEW_COLS * gm.dim)
+#define tv_to_map_y(y) ((y) / (float)scr.TOP_VIEW_ROWS * gm.dim)
+
+
+typedef struct {
+    int POV_PIX_W;
+    int POV_PIX_H;
+
+    int TOP_VIEW_ROWS;
+    int TOP_VIEW_COLS;
+
+    int POV_ROWS;
+    int POV_COLS;
+
+    int SCR_WIDTH;
+    int SCR_HEIGHT;
+
+    float PLAYER_POV;
+
+    // Step angle diff between two rays in radians
+    float RAY_ANGLE_STEP; // theta
+    
+} Screen;
+
+static float RAY_STEP_COS;
+static float RAY_STEP_SIN;
+
+static void screen_set_pov_cols(Screen* scr, int pov_cols) {
+    scr->POV_COLS = pov_cols;
+    scr->RAY_ANGLE_STEP = degToRad( scr->PLAYER_POV / scr->POV_COLS );
+
+    RAY_STEP_COS = cos(scr->RAY_ANGLE_STEP);
+    RAY_STEP_SIN = sin(scr->RAY_ANGLE_STEP);
+}
+
+static void screen_reset(Screen* scr, int width, int height)
+{
+    // At least 4, if a texel should be bigger, then round to more
+    // Mutpily by 2 to avoid having texture of uneven dimensions (probably bad for OpenGL?)
+    static int screen_round_to = max(max(TOP_VIEW_PIX_W * 2, TOP_VIEW_PIX_H * 2), 4);
+
+    // Window dimensions must be aligned to multiple of 4 
+    // because OpenGL doesn't correctly display textures with dimensions unaligned to 4
+    if (width != scr->SCR_WIDTH && width % screen_round_to != 0) {
+        if (width > scr->SCR_WIDTH) {
+            width += screen_round_to - width % screen_round_to;
+        } else {
+            width -= width % screen_round_to;
+        }
+    }
+
+    if (height != scr->SCR_HEIGHT && height % screen_round_to != 0) {
+        if (height > scr->SCR_HEIGHT) {
+            height += screen_round_to - height % screen_round_to;
+        } else {
+            height -= height % screen_round_to;
+        }
+    }
+
+    scr->SCR_WIDTH = width * 2;
+    scr->SCR_HEIGHT = height;
+
+    scr->TOP_VIEW_COLS = width / TOP_VIEW_PIX_W;
+    scr->TOP_VIEW_ROWS = height / TOP_VIEW_PIX_H;
+
+    float new_pov_cols = width / TOP_VIEW_PIX_W;
+    screen_set_pov_cols(scr, new_pov_cols);
+    //scr->POV_COLS = width / TOP_VIEW_PIX_W;
+    scr->POV_ROWS = height / TOP_VIEW_PIX_H;
+
+    printf("Screen WIDTH: %d\n", scr->SCR_WIDTH);
+    printf("Screen HEIGHT: %d\n", scr->SCR_HEIGHT);
+    printf("\n\n");
+
+
+    /*textureBuffer_reset(&top_view_tb, scr->TOP_VIEW_COLS, scr->TOP_VIEW_ROWS);
+    textureBuffer_reset(&pov_tb, scr->POV_COLS, scr->POV_ROWS);*/
+}
+
+Screen scr = {
+    .TOP_VIEW_ROWS = 128,
+    .TOP_VIEW_COLS = 128,
+    .PLAYER_POV = 120,
+};
 
 
 GLFWwindow* window = NULL;
@@ -103,47 +190,8 @@ void APIENTRY glDebugOutput(GLenum source,
 
 
 
-void screen_reset(int width, int height) 
-{
-    // At least 4, if a texel should be bigger, then round to more
-    // Mutpily by 2 to avoid having texture of uneven dimensions (probably bad for OpenGL?)
-    static int screen_round_to = max(max(TOP_VIEW_PIX_W*2, TOP_VIEW_PIX_H*2), 4);
-
-    // Window dimensions must be aligned to multiple of 4 
-    // because OpenGL doesn't correctly display textures with dimensions unaligned to 4
-    if (width != SCR_WIDTH && width % screen_round_to != 0) {
-        if (width > SCR_WIDTH) {
-            width += screen_round_to - width % screen_round_to;
-        } else {
-            width -= width % screen_round_to;
-        }
-    }
-
-    if (height != SCR_HEIGHT && height % screen_round_to != 0) {
-        if (height > SCR_HEIGHT) {
-            height += screen_round_to - height % screen_round_to;
-        } else {
-            height -= height % screen_round_to;
-        }
-    }
-
-    SCR_WIDTH  = width * 2;
-    SCR_HEIGHT = height;
-
-    TOP_VIEW_COLS = width / TOP_VIEW_PIX_W;
-    TOP_VIEW_ROWS = height / TOP_VIEW_PIX_H;
-
-    POV_COLS = width / TOP_VIEW_PIX_W;
-    POV_ROWS = height / TOP_VIEW_PIX_H;
-
-    printf("Screen WIDTH: %d\n", SCR_WIDTH);
-    printf("Screen HEIGHT: %d\n", SCR_HEIGHT);
-    printf("\n\n");
 
 
-    textureBuffer_reset(&top_view_tb, TOP_VIEW_COLS, TOP_VIEW_ROWS);
-    textureBuffer_reset(&pov_tb, POV_COLS, POV_ROWS);
-}
 
 
 
@@ -155,7 +203,9 @@ void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height)
     // height will be significantly larger than specified on retina displays.
     glViewport(0, 0, width, height);
 
-    screen_reset(width, height);
+    screen_reset(&scr, width, height);
+    textureBuffer_reset(&top_view_tb, scr.TOP_VIEW_COLS, scr.TOP_VIEW_ROWS);
+    textureBuffer_reset(&pov_tb, scr.POV_COLS, scr.POV_ROWS);
 }
 
 
@@ -184,8 +234,8 @@ static void glfw_cursor_position_callback(GLFWwindow* window, double xpos, doubl
     MOUSE_X_SCREEN_SPACE = xpos; // Mult by 2 to anchor mouse pos relative to top view
     MOUSE_Y_SCREEN_SPACE = ypos;
 
-    MOUSE_X_TEX_SPACE = MOUSE_X_SCREEN_SPACE / SCR_WIDTH * TOP_VIEW_COLS;
-    MOUSE_Y_TEX_SPACE = MOUSE_Y_SCREEN_SPACE / SCR_HEIGHT * TOP_VIEW_ROWS;
+    MOUSE_X_TEX_SPACE = MOUSE_X_SCREEN_SPACE / scr.SCR_WIDTH * scr.TOP_VIEW_COLS;
+    MOUSE_Y_TEX_SPACE = MOUSE_Y_SCREEN_SPACE / scr.SCR_HEIGHT * scr.TOP_VIEW_ROWS;
 
     MOUSE_DELTA_X = xpos - prev_x;
     MOUSE_DELTA_Y = ypos - prev_y;
@@ -257,6 +307,10 @@ static const float stop_dist = 0.1;
 
 static const float mov_speed = 3;
 
+// Step angle diff between two rays in radians
+static float RAY_ANGLE_STEP;
+
+// Coordinates of player in map
 static Vec2 player = {2, 3};
 
 static Vec2 player_look_dir = {0, 1};
@@ -273,10 +327,15 @@ static Pixel CYAN = { 0, 255, 255 };
 static Pixel PLAYER_COLOR;
 static Pixel NEAREST_PLANE_COLOR;
 
-#define M_PI   3.14159265358979323846264338327950288
 
-#define degToRad(angleInDegrees) ((angleInDegrees) * M_PI / 180.0)
-#define radToDeg(angleInRadians) ((angleInRadians) * 180.0 / M_PI)
+#define draw_TV(x, y, pix) do {\
+    textureBuffer_setPixel(&top_view_tb, (x), (scr.TOP_VIEW_ROWS-y), (pix)); \
+} while(0)
+
+#define draw_POV(x, y, pix) do {\
+    textureBuffer_setPixel(&pov_tb, (x), (y), (pix)); \
+} while(0)
+
 
 void globals_Init()
 {
@@ -284,22 +343,20 @@ void globals_Init()
     NEAREST_PLANE_COLOR = MAGENTA;
 
 
-    
-    // to get 45 degree POV
-    plane_width = plane_dist * tan(degToRad(22.5)) * 2;
+    plane_width = plane_dist * tan(degToRad(scr.PLAYER_POV / 2.0)) * 2.0;
 
 
     //POV_COLS = plane_width * supersampling;
-    POV_COLS = 128;
-    POV_ROWS = POV_COLS;
+    screen_set_pov_cols(&scr, 128);
+    scr.POV_ROWS = scr.POV_COLS;
 
-    int half_screen_w = TOP_VIEW_COLS * TOP_VIEW_PIX_W;
+    int half_screen_w = scr.TOP_VIEW_COLS * TOP_VIEW_PIX_W;
 
-    POV_PIX_W = half_screen_w / POV_COLS;
-    POV_PIX_H = POV_PIX_W;
+    scr.POV_PIX_W = half_screen_w / scr.POV_COLS;
+    scr.POV_PIX_H = scr.POV_PIX_W;
 
-    SCR_WIDTH = TOP_VIEW_COLS * TOP_VIEW_PIX_W * 2;
-    SCR_HEIGHT = TOP_VIEW_ROWS * TOP_VIEW_PIX_H;
+    scr.SCR_WIDTH = scr.TOP_VIEW_COLS * TOP_VIEW_PIX_W * 2;
+    scr.SCR_HEIGHT = scr.TOP_VIEW_ROWS * TOP_VIEW_PIX_H;
 
     NUM_STEPS = TILE_STEPS * gm.dim;
 
@@ -315,31 +372,6 @@ void processInput(GLFWwindow* window, double delta_time) {
     }
 }
 
-
-//#define Draw(x, y, pix) do {\
-//    textureBuffer_setPixel(&tb, x, y, pix); \
-//    printf("Set pixel at (%d,%d)\n", x, y); \
-//} while(0)
-
-#define drawTopView(x, y, pix) do {\
-    textureBuffer_setPixel(&top_view_tb, (x), (TOP_VIEW_ROWS-y), (pix)); \
-} while(0)
-
-#define drawPov(x, y, pix) do {\
-    textureBuffer_setPixel(&pov_tb, (x), (y), (pix)); \
-} while(0)
-
-//void Draw(int x, int y, Pixel pix) {
-//    textureBuffer_setPixel(&tb, x, y, pix);
-//    printf("Set pixel at (%d,%d)\n", x, y);
-//}
-
-
-#define pix_x(x) ((x) / gm.dim * TOP_VIEW_COLS)
-#define pix_y(y) ((y) / gm.dim * TOP_VIEW_ROWS)
-
-#define map_x(x) ((x) / (float)TOP_VIEW_COLS * gm.dim)
-#define map_y(y) ((y) / (float)TOP_VIEW_ROWS * gm.dim)
 
 
 
@@ -357,7 +389,7 @@ void drawNearestPlane(Vec2 player_pos_pixel_space, Vec2 player_look_dir)
 
         Vec2 vpl = vec2_add(player_pos_pixel_space, plane_next);
 
-        drawTopView(vpl.x, vpl.y, NEAREST_PLANE_COLOR);
+        draw_TV(vpl.x, vpl.y, NEAREST_PLANE_COLOR);
     }
 }
 
@@ -365,7 +397,7 @@ void drawPlayer(Vec2 player_pos_pixel_space)
 {
     for (int i = -1; i < 2; ++i) {
         for (int j = -1; j < 2; ++j) {
-            drawTopView(player_pos_pixel_space.x + i, player_pos_pixel_space.y + j, PLAYER_COLOR);
+            draw_TV(player_pos_pixel_space.x + i, player_pos_pixel_space.y + j, PLAYER_COLOR);
         }
     }
 }
@@ -393,7 +425,7 @@ void gameLogic(double delta_time) {
         delta_x += mov_speed * delta_time;
     }
 
-    Vec2 player_pos_pixel_space = { pix_x(player.x), pix_x(player.y)};
+    Vec2 player_pos_pixel_space = { map_to_tv_x(player.x), map_to_tv_x(player.y)};
 
     /*player_look_dir.x = MOUSE_X_TEX_SPACE - player_pos_pixel_space.x;
     player_look_dir.y = MOUSE_Y_TEX_SPACE - player_pos_pixel_space.y;*/
@@ -433,23 +465,36 @@ void gameLogic(double delta_time) {
     
 
     //int num_rays = plane_width * supersampling;
-    int num_rays = POV_COLS;
+    int num_rays = scr.POV_COLS;
     
     //float i_step = 1 / (float)supersampling;
     //int ray_len = 50;
     float ray_step = 0.1;
-    int num_ray_steps = TOP_VIEW_ROWS / ray_step;
+    int num_ray_steps = scr.TOP_VIEW_ROWS / ray_step;
 
-    int player_view_dist = TOP_VIEW_ROWS;
+    int player_view_dist = scr.TOP_VIEW_ROWS;
     float stop_dist = 5;
 
     bool player_stop = false;
+
+
+    // Rotate fully to the left of pov 
+    float half_pov = scr.PLAYER_POV / 2.f;
+    float cos_start = cos(degToRad(-half_pov));
+    float sin_start = sin(degToRad(-half_pov));
+
+    float ray_x = player_look_dir.x * cos_start - player_look_dir.y * sin_start;
+    float ray_y = player_look_dir.x * sin_start + player_look_dir.y * cos_start;
+
+    Vec2 rayd = { ray_x, ray_y };
+
+    Vec2 ray_origin = player_pos_pixel_space;
 
     //for (float i = -plane_width/2; i < plane_width/2+1; i += i_step) {
     for (int i = 0; i < num_rays; ++i) {
         // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
 
-        Vec2 plane_center = vec2_muli(player_look_dir, plane_dist);
+        /*Vec2 plane_center = vec2_mulf(player_look_dir, plane_dist);
 
         float half_pw = plane_width / 2.f;
         float adv = -half_pw + i / (float)num_rays * plane_width;
@@ -458,15 +503,42 @@ void gameLogic(double delta_time) {
 
         Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
 
-        Vec2 ray_origin = vec2_add(player_pos_pixel_space, plane_next);
+        Vec2 ray_origin = vec2_add(player_pos_pixel_space, plane_next);*/
 
         //Draw(vpl.x, vpl.y, nearest_plane_col);
 
-        Vec2 rayd = vec2_sub(ray_origin, player_pos_pixel_space);
+        
 
-        rayd = vec2_normalized(rayd);
+        
+        if (i > 0) {
+            // Rotate ray to next step
+            ray_x = rayd.x * RAY_STEP_COS - rayd.y * RAY_STEP_SIN;
+            ray_y = rayd.x * RAY_STEP_SIN + rayd.y * RAY_STEP_COS;
+
+            rayd.x = ray_x;
+            rayd.y = ray_y;
+
+            // TODO: is already normalized?
+            rayd = vec2_normalized(rayd);
+        }
+
         
         
+        
+        // Draw floor and ceiling
+        {
+            int half_r = scr.POV_ROWS / 2;
+
+            // Floor
+            for (int y = 0; y < half_r + 1; ++y) {
+                draw_POV(i, y, pixel_mulf(floorcol, 1));
+            }
+            // Ceilling
+            for (int y = half_r + 1; y < scr.POV_ROWS; ++y) {
+                draw_POV(i, y, pixel_mulf(ceilcol, 1));
+            }
+        }
+
         bool hit = false;
         int j = 0;
         for (; j < num_ray_steps && !hit; ++j) {
@@ -478,17 +550,17 @@ void gameLogic(double delta_time) {
 
             
 
-            drawTopView(rayp.x, rayp.y, raycol);
+            draw_TV(rayp.x, rayp.y, raycol);
 
 
-            Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
+            Vec2 tilep = { tv_to_map_x(rayp.x), tv_to_map_y(rayp.y) };
 
 
             int tile_x = tilep.x;
             int tile_y = tilep.y;
 
             // Don't go out of map bounds
-            if (tile_x < 0.f || tile_y < 0.f ||
+            if (tile_x < 0.f    || tile_y < 0.f     ||
                 tile_x > gm.dim || tile_y > gm.dim) {
                 break;
             }
@@ -499,14 +571,14 @@ void gameLogic(double delta_time) {
             int tile = gm.map[tile_x + gm.dim * tile_y];
             hit = tile != 0;
             if (hit) {
-                drawTopView(rayp.x, rayp.y, wallcol);
+                draw_TV(rayp.x, rayp.y, wallcol);
 
                 //int pov_y = POV_ROWS / 2;
                 
 
                 //Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
-                Vec2 player_to_wall = vec2_sub(rayp, ray_origin);
-                float dist_to_wall = vec2_magnitude(player_to_wall);
+                Vec2  player_to_wall = vec2_sub(rayp, ray_origin);
+                float dist_to_wall   = vec2_magnitude(player_to_wall);
                 //if (dist_to_wall < stop_dist) { // stop
                 //    player_stop = true;
                 //}
@@ -523,61 +595,20 @@ void gameLogic(double delta_time) {
                 ////float factor = pow(pw, 1 + ratio) - pw;
                 //float factor = ratio;
 
-                int height = POV_ROWS - factor * POV_ROWS;
+                //int height = POV_ROWS * (1 - factor);
+                int height = scr.POV_ROWS - scr.POV_ROWS * (dist_to_wall / player_view_dist);
                 int half_h = height / 2;
 
-                int half_r = POV_ROWS / 2;
+                int half_r = scr.POV_ROWS / 2;
 
-                float brightness = height / (float)POV_ROWS;
-                // Floor
-                for (int y = 0; y < half_r - half_h + 1; ++y) {
-                    drawPov(i, y, pixel_mulf(floorcol, 1));
-                }
-                // Wall
+                float brightness = height / (float)scr.POV_ROWS;
+                // Draw wall
                 for (int y = half_r - half_h; y < half_r + half_h + 1; ++y) {
-                    drawPov(i, y, pixel_mulf(wallcol, brightness));
+                    draw_POV(i, y, pixel_mulf(wallcol, brightness));
                 }
-                // Ceilling
-                for (int y = half_r + half_h + 1; y < POV_ROWS; ++y) {
-                    drawPov(i, y, pixel_mulf(ceilcol, 1));
-                }
-            }
-        }
-        // Hit nothing
-        //if (j >= ray_len) {
-        if (!hit) {
-            /*Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
-            float dist_to_wall = vec2_magnitude(player_to_wall);*/
-            //if (dist_to_wall < stop_dist) { // stop
-            //    player_stop = true;
-            //}
-
-
-
-            //int height = POV_ROWS - dist_to_wall / TOP_VIEW_COLS * POV_ROWS;
-            //int height = POV_ROWS - dist_to_wall / ray_len * POV_ROWS;
-            int height = 0;
-            int half_h = height / 2;
-
-            int half_r = POV_ROWS / 2;
-
-            float brightness = height / (float)POV_ROWS;
-            // Floor
-            for (int y = 0; y < half_r - half_h + 1; ++y) {
-                drawPov(i, y, pixel_mulf(floorcol, 1));
-            }
-            // Wall
-            /*for (int y = half_r - half_h; y < half_r + half_h + 1; ++y) {
-                drawPov(i, y, pixel_mulf(wallcol, brightness));
-            }*/
-            // Ceilling
-            for (int y = half_r + half_h + 1; y < POV_ROWS; ++y) {
-                drawPov(i, y, pixel_mulf(ceilcol, 1));
             }
         }
     }
-
-
 
 
     // Cast a ray in the direction the player is moving to detect collision with wall
@@ -587,26 +618,26 @@ void gameLogic(double delta_time) {
     Pixel collision_ray_col = CYAN;
     int collision_ray_len = stop_dist * 10;
 
-    Vec2 rayd = player_move_dir;
+    Vec2 rayd_coll = player_move_dir;
 
    
 
-    //printf("Moving in dir (%f, %f)   %f\n", rayd.x, rayd.y, vec2_magnitude(rayd));
+    //printf("Moving in dir (%f, %f)   %f\n", rayd_coll.x, rayd_coll.y, vec2_magnitude(rayd_coll));
 
     bool hit = false;
     for (int j = 0; j < collision_ray_len && !hit; ++j) {
 
-        Vec2 ray_dir_advanced = vec2_mulf(rayd, j * ray_step);
+        Vec2 ray_dir_advanced = vec2_mulf(rayd_coll, j * ray_step);
         Vec2 rayp = vec2_add(player_pos_pixel_space, ray_dir_advanced);
 
         if (rayp.x < 0.f || rayp.y < 0.f) {
             break;
         }
 
-        drawTopView(rayp.x, rayp.y, collision_ray_col);
+        draw_TV(rayp.x, rayp.y, collision_ray_col);
 
 
-        Vec2 tilep = { map_x(rayp.x), map_y(rayp.y) };
+        Vec2 tilep = { tv_to_map_x(rayp.x), tv_to_map_y(rayp.y) };
         assert(tilep.x < 11 && tilep.y < 11);
         assert(tilep.x > -1 && tilep.y > -1);
 
@@ -646,7 +677,7 @@ void gameLogic(double delta_time) {
         float ldx = player_pos_pixel_space.x + player_look_dir.x * i;
         float ldy = player_pos_pixel_space.y + player_look_dir.y * i;
 
-        drawTopView(ldx, ldy, ldcol);
+        draw_TV(ldx, ldy, ldcol);
     }
 
 
@@ -674,7 +705,7 @@ int opengl_init()
 
     // glfw window creation
     // --------------------
-    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Raycaster", NULL, NULL);
+    window = glfwCreateWindow(scr.SCR_WIDTH, scr.SCR_HEIGHT, "Raycaster", NULL, NULL);
     if (window == NULL)
     {
         printf("Failed to create GLFW window\n");
@@ -932,8 +963,8 @@ int main(void)
     globals_Init();
 
 
-    textureBuffer_init(&top_view_tb, TOP_VIEW_COLS, TOP_VIEW_ROWS);
-    textureBuffer_init(&pov_tb, POV_COLS, POV_ROWS);
+    textureBuffer_init(&top_view_tb, scr.TOP_VIEW_COLS, scr.TOP_VIEW_ROWS);
+    textureBuffer_init(&pov_tb, scr.POV_COLS, scr.POV_ROWS);
 
     if (opengl_init() != 0) {
         return -1;
