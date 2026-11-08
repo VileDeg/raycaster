@@ -30,6 +30,10 @@ Vec2 vec2_perpendicular(Vec2 v) {
     return (Vec2){ -v.y, v.x };
 }
 
+Vec2 vec2_inv(Vec2 v) {
+  return (Vec2) { -v.x, -v.y };
+}
+
 
 Vec2 vec2_add(Vec2 v, Vec2 vv) {
     return (Vec2){ v.x+vv.x, v.y+vv.y };

@@ -50,7 +50,7 @@ typedef struct {
     int SCR_WIDTH;
     int SCR_HEIGHT;
 
-    float PLAYER_POV;
+    float PLAYER_FOV;
 
     // Step angle diff between two rays in radians
     float RAY_ANGLE_STEP; // theta
@@ -62,7 +62,7 @@ static float RAY_STEP_SIN;
 
 static void screen_set_pov_cols(Screen* scr, int pov_cols) {
     scr->POV_COLS = pov_cols;
-    scr->RAY_ANGLE_STEP = degToRad( scr->PLAYER_POV / scr->POV_COLS );
+    scr->RAY_ANGLE_STEP = degToRad( scr->PLAYER_FOV / scr->POV_COLS );
 
     RAY_STEP_COS = cos(scr->RAY_ANGLE_STEP);
     RAY_STEP_SIN = sin(scr->RAY_ANGLE_STEP);
@@ -74,8 +74,8 @@ static void screen_reset(Screen* scr, int width, int height)
     // Mutpily by 2 to avoid having texture of uneven dimensions (probably bad for OpenGL?)
     static int screen_round_to = max(max(TOP_VIEW_PIX_W * 2, TOP_VIEW_PIX_H * 2), 4);
 
-    // Window dimensions must be aligned to multiple of 4 
-    // because OpenGL doesn't correctly display textures with dimensions unaligned to 4
+    // Window dimensions must be aligned to multiple of 2 
+    // because OpenGL doesn't correctly display textures with dimensions unaligned to 2
     if (width != scr->SCR_WIDTH && width % screen_round_to != 0) {
         if (width > scr->SCR_WIDTH) {
             width += screen_round_to - width % screen_round_to;
@@ -115,7 +115,7 @@ static void screen_reset(Screen* scr, int width, int height)
 Screen scr = {
     .TOP_VIEW_ROWS = 128,
     .TOP_VIEW_COLS = 128,
-    .PLAYER_POV = 120,
+    .PLAYER_FOV = 66, // degrees
 };
 
 
@@ -251,7 +251,7 @@ static void glfw_cursor_position_callback(GLFWwindow* window, double xpos, doubl
 
 char* readShaderSource(const char* filepath) {
     
-    FILE* fd = fopen(filepath, "r");
+    FILE* fd = fopen(filepath, "rb");
     if (fd == NULL) {
         printf("Failed to open file: %s\n", filepath);
         return NULL;
@@ -297,9 +297,8 @@ static int NUM_STEPS;
 //static const float dist_to_near_plane = 0.2; // equals to half plane width means 45 degree FOV
 //static const float near_plane_width = 0.4;
 
-
 static float plane_width;
-static float plane_dist = 4;
+//static float plane_dist = 4;
 
 //static const int supersampling = 32;
 
@@ -343,7 +342,10 @@ void globals_Init()
     NEAREST_PLANE_COLOR = MAGENTA;
 
 
-    plane_width = plane_dist * tan(degToRad(scr.PLAYER_POV / 2.0)) * 2.0;
+    //plane_width = plane_dist * tan(degToRad(scr.PLAYER_FOV / 2.0)) * 2.0;
+
+    plane_width = tan(degToRad(scr.PLAYER_FOV / 2.0));
+
 
 
     //POV_COLS = plane_width * supersampling;
@@ -378,7 +380,9 @@ void processInput(GLFWwindow* window, double delta_time) {
 void drawNearestPlane(Vec2 player_pos_pixel_space, Vec2 player_look_dir)
 {
     Vec2 plane_dir = vec2_perpendicular(player_look_dir);
-    Vec2 plane_center = vec2_muli(player_look_dir, plane_dist);
+    //Vec2 plane_center = vec2_muli(player_look_dir, plane_dist);
+    Vec2 plane_center = player_pos_pixel_space;
+
 
     for (float i = -plane_width / 2; i < plane_width / 2 + 1; i += 1) {
         // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
@@ -425,22 +429,39 @@ void gameLogic(double delta_time) {
         delta_x += mov_speed * delta_time;
     }
 
-    Vec2 player_pos_pixel_space = { map_to_tv_x(player.x), map_to_tv_x(player.y)};
+    bool was_any_input = delta_x || delta_y || must_update_player_look_dir;
+    if (!was_any_input) {
+      return;
+    }
+
 
     /*player_look_dir.x = MOUSE_X_TEX_SPACE - player_pos_pixel_space.x;
     player_look_dir.y = MOUSE_Y_TEX_SPACE - player_pos_pixel_space.y;*/
     if (must_update_player_look_dir) {
-        theta += MOUSE_DELTA_X * delta_time;
+        //theta += MOUSE_DELTA_X * delta_time;
 
-        player_look_dir.x = cos(theta);
-        player_look_dir.y = sin(theta);
+        //player_look_dir.x = cos(theta);
+        //player_look_dir.y = sin(theta);
 
-        player_look_dir = vec2_normalized(player_look_dir);
+        //player_look_dir = vec2_normalized(player_look_dir);
+
+        float rotSpeed = MOUSE_DELTA_X * delta_time;
+        rotSpeed = -rotSpeed;
+        double oldDirX = player_look_dir.x;
+        player_look_dir.x = player_look_dir.x * cos(-rotSpeed) - player_look_dir.y * sin(-rotSpeed);
+        player_look_dir.y = oldDirX * sin(-rotSpeed) + player_look_dir.y * cos(-rotSpeed);
+        //double oldPlaneX = planeX;
+        //planeX = planeX * cos(-rotSpeed) - planeY * sin(-rotSpeed);
+        //planeY = oldPlaneX * sin(-rotSpeed) + planeY * cos(-rotSpeed);
 
         must_update_player_look_dir = false;
     }
 
     Vec2 plane_dir = vec2_perpendicular(player_look_dir);
+
+    printf("\n", player_look_dir.x, player_look_dir.y);
+    printf("player_look_dir: %f, %f\n", player_look_dir.x, player_look_dir.y);
+    printf("plane_dir: %f, %f\n", plane_dir.x, plane_dir.y);
 
     Vec2 addx = vec2_mulf(plane_dir, delta_x);
     Vec2 addy = vec2_mulf(player_look_dir, -delta_y);
@@ -448,6 +469,9 @@ void gameLogic(double delta_time) {
     Vec2 player_delta_pos = vec2_add(addx, addy);
 
     player = vec2_add(player, player_delta_pos);
+
+    Vec2 player_pos_pixel_space = { map_to_tv_x(player.x), map_to_tv_x(player.y) };
+
 
     /*player.x += ;
     player.y += delta_y;*/
@@ -477,22 +501,78 @@ void gameLogic(double delta_time) {
 
     bool player_stop = false;
 
+    //Vec2 plane_center_offset = vec2_mulf(player_look_dir, plane_dist);
+    //Vec2 plane_center = vec2_add(player_pos_pixel_space, plane_center_offset);
+    Vec2 plane_center = player_pos_pixel_space;
 
+#if 0
     // Rotate fully to the left of pov 
     float half_pov = scr.PLAYER_POV / 2.f;
     float cos_start = cos(degToRad(-half_pov));
     float sin_start = sin(degToRad(-half_pov));
 
+
+    //for (float i = -plane_width / 2; i < plane_width / 2 + 1; i += 1) {
+    //  // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
+
+    //  Vec2 plane_dir_advanced = vec2_mulf(plane_dir, i);
+
+    //  Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
+
+    //  Vec2 vpl = vec2_add(player_pos_pixel_space, plane_next);
+
+    //  draw_TV(vpl.x, vpl.y, NEAREST_PLANE_COLOR);
+    //}
+
+    //Vec2 ray_start = vec2_subf(player, sin_start);
+    //ray_start = vec2_add(ray_start, player_look_dir);
+
+
     float ray_x = player_look_dir.x * cos_start - player_look_dir.y * sin_start;
     float ray_y = player_look_dir.x * sin_start + player_look_dir.y * cos_start;
 
     Vec2 rayd = { ray_x, ray_y };
+    Vec2 ray_origin = player_pos_pixel_space; // TODO: origin has to be on the plane
+#endif
 
-    Vec2 ray_origin = player_pos_pixel_space;
+    // Left to right
+    Vec2 plane_dir_neg = vec2_inv(plane_dir);
+    // Plane dir is right to left (TODO: change that?)
+    Vec2 plane_left = vec2_add(plane_center, vec2_mulf(plane_dir_neg, plane_width / 2));
 
     //for (float i = -plane_width/2; i < plane_width/2+1; i += i_step) {
     for (int i = 0; i < num_rays; ++i) {
         // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
+
+        double dirX = player_look_dir.x;
+        double dirY = player_look_dir.y;
+
+        double planeX = plane_dir.x * plane_width;
+        double planeY = plane_dir.y * plane_width;
+
+        //calculate ray position and direction
+        double cameraX = 2 * i / (double)num_rays - 1; //x-coordinate in camera space
+        double rayDirX = dirX + planeX * cameraX;
+        double rayDirY = dirY + planeY * cameraX;
+
+        printf("rayDir: %f, %f\n", rayDirX, rayDirY);
+
+#if 0
+        assert(num_rays > 0);
+        float progress = plane_width / (num_rays - 1) * i; // TODO: add 0.5 in the middle or interval
+        Vec2 ray_origin =
+          //vec2_add(
+          vec2_add( // on plane line
+            plane_left,
+            vec2_mulf(plane_dir, progress)
+          );//,
+            //player_look_dir
+         // );
+#endif
+
+        //Vec2 rayd = vec2_sub(ray_origin, player_pos_pixel_space);
+        //rayd = vec2_normalized(rayd);
+
 
         /*Vec2 plane_center = vec2_mulf(player_look_dir, plane_dist);
 
@@ -506,10 +586,160 @@ void gameLogic(double delta_time) {
         Vec2 ray_origin = vec2_add(player_pos_pixel_space, plane_next);*/
 
         //Draw(vpl.x, vpl.y, nearest_plane_col);
-
         
+      
+#define DDA
+#ifdef DDA
 
-        
+        float posX = player.x;
+        float posY = player.y;
+
+        //which box of the map we're in
+        int mapX = (int)posX;
+        int mapY = (int)posY;
+
+        //length of ray from current position to next x or y-side
+        double sideDistX;
+        double sideDistY;
+
+        //length of ray from one x or y-side to next x or y-side
+        //these are derived as:
+        //deltaDistX = sqrt(1 + (rayDirY * rayDirY) / (rayDirX * rayDirX))
+        //deltaDistY = sqrt(1 + (rayDirX * rayDirX) / (rayDirY * rayDirY))
+        //which can be simplified to abs(|rayDir| / rayDirX) and abs(|rayDir| / rayDirY)
+        //where |rayDir| is the length of the vector (rayDirX, rayDirY). Its length,
+        //unlike (dirX, dirY) is not 1, however this does not matter, only the
+        //ratio between deltaDistX and deltaDistY matters, due to the way the DDA
+        //stepping further below works. So the values can be computed as below.
+        // Division through zero is prevented, even though technically that's not
+        // needed in C++ with IEEE 754 floating point values.
+        double deltaDistX = (rayDirX == 0) ? 1e30 : fabs(1 / rayDirX);
+        double deltaDistY = (rayDirY == 0) ? 1e30 : fabs(1 / rayDirY);
+
+        //double rayDirX = rayd.x;
+        //double rayDirY = rayd.y;
+
+        double perpWallDist;
+
+        // Draw floor and ceiling
+        {
+          int half_r = scr.POV_ROWS / 2;
+
+          // Floor
+          for (int y = 0; y < half_r + 1; ++y) {
+            draw_POV(i, y, pixel_mulf(floorcol, 1));
+          }
+          // Ceilling
+          for (int y = half_r + 1; y < scr.POV_ROWS; ++y) {
+            draw_POV(i, y, pixel_mulf(ceilcol, 1));
+          }
+        }
+
+        //what direction to step in x or y-direction (either +1 or -1)
+        int stepX;
+        int stepY;
+
+        int hit = 0; //was there a wall hit?
+        int side; //was a NS or a EW wall hit?
+        //calculate step and initial sideDist
+        if (rayDirX < 0)
+        {
+          stepX = -1;
+          sideDistX = (posX - mapX) * deltaDistX;
+        } else
+        {
+          stepX = 1;
+          sideDistX = (mapX + 1.0 - posX) * deltaDistX;
+        }
+        if (rayDirY < 0)
+        {
+          stepY = -1;
+          sideDistY = (posY - mapY) * deltaDistY;
+        } else
+        {
+          stepY = 1;
+          sideDistY = (mapY + 1.0 - posY) * deltaDistY;
+        }
+        //perform DDA
+        while (hit == 0)
+        {
+          //jump to next map square, either in x-direction, or in y-direction
+          if (sideDistX < sideDistY)
+          {
+            sideDistX += deltaDistX;
+            mapX += stepX;
+            side = 0;
+          } else
+          {
+            sideDistY += deltaDistY;
+            mapY += stepY;
+            side = 1;
+          }
+
+          // Don't go out of map bounds
+          if (mapX < 0.f || mapY < 0.f ||
+            mapX > gm.dim || mapY > gm.dim) {
+            break;
+          }
+
+          assert(mapX >= 0 && mapX <= gm.dim);
+          assert(mapY >= 0 && mapY <= gm.dim);
+
+          int tile = gm.map[mapX + gm.dim * mapY];
+
+          //Check if ray has hit a wall
+          if (tile > 0) {
+            hit = 1;
+          }
+
+          // TODO: draw ray in top view somehow
+          //draw_TV(rayp.x, rayp.y, raycol);
+
+        }
+
+        if (!hit) {
+          continue;
+        }
+        //Calculate distance projected on camera direction. This is the shortest distance from the point where the wall is
+        //hit to the camera plane. Euclidean to center camera point would give fisheye effect!
+        //This can be computed as (mapX - posX + (1 - stepX) / 2) / rayDirX for side == 0, or same formula with Y
+        //for size == 1, but can be simplified to the code below thanks to how sideDist and deltaDist are computed:
+        //because they were left scaled to |rayDir|. sideDist is the entire length of the ray above after the multiple
+        //steps, but we subtract deltaDist once because one step more into the wall was taken above.
+        if (side == 0) {
+          perpWallDist = (sideDistX - deltaDistX);
+        } else {
+          perpWallDist = (sideDistY - deltaDistY);
+        }
+
+        //int height = POV_ROWS * (1 - factor);
+               //*/
+        int wall_height = scr.POV_ROWS / perpWallDist;
+        /*/
+
+        int height = 1 / dist_to_wall * scr.POV_ROWS ;
+
+        //*/
+
+        int half_h = wall_height / 2;
+
+        int half_r = scr.POV_ROWS / 2;
+
+        float brightness = wall_height / (float)scr.POV_ROWS;
+
+        wallcol = side > 0 ? RED : BLUE;
+        // Draw wall
+        for (int y = half_r - half_h; y < half_r + half_h; ++y) {
+          draw_POV(i, y, pixel_mulf(wallcol, brightness));
+        }
+
+
+#else
+
+
+
+
+#if 0
         if (i > 0) {
             // Rotate ray to next step
             ray_x = rayd.x * RAY_STEP_COS - rayd.y * RAY_STEP_SIN;
@@ -521,9 +751,7 @@ void gameLogic(double delta_time) {
             // TODO: is already normalized?
             rayd = vec2_normalized(rayd);
         }
-
-        
-        
+#endif
         
         // Draw floor and ceiling
         {
@@ -577,18 +805,52 @@ void gameLogic(double delta_time) {
                 
 
                 //Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
-                Vec2  player_to_wall = vec2_sub(rayp, ray_origin);
-                float dist_to_wall   = vec2_magnitude(player_to_wall);
+                Vec2  origin_to_wall = vec2_sub(rayp, ray_origin);
+                float dist_to_wall   = vec2_magnitude(origin_to_wall);
                 //if (dist_to_wall < stop_dist) { // stop
                 //    player_stop = true;
                 //}
 
-                
+                //*/
+                // Correct fish-eye distortion: use perpendicular distance to the wall plane
+                // Get cos by dot product since both rays are normalized
+                float cosT = rayd.x * player_look_dir.x + rayd.y * player_look_dir.y;
+                dist_to_wall *= cosT;
+                /*/
 
+                // hit point
+                float x0 = rayp.x;
+                float y0 = rayp.y;
+
+                float x1 = plane_center.x;
+                float y1 = plane_center.y;
+
+                float vx = plane_dir.x;
+                float vy = plane_dir.y;
+
+                float denom = 1;
+
+                float num = vx * (y1 - y0) - vy * (x1 - x0);
+
+                dist_to_wall = num / denom;
+
+                //*/
+
+#if 0                
+                Vec2 plane_ray_projection = vec2_addf(plane_left, progress);
+
+                float prpdc =   // plane_ray_projection_dist_from_center
+                  vec2_magnitude(vec2_sub(plane_center, plane_ray_projection));
+
+                float plane_distance = sqrt(dist_to_wall * dist_to_wall - prpdc * prpdc);
+                float ratio = plane_distance / player_view_dist;
+
+#else 
                 float ratio = dist_to_wall / player_view_dist;
+#endif
                 //float pw = 2.5;
                 //float factor = pow(pw, 1+ratio) - pw;
-                float factor = ratio;
+                //float factor = ratio;
 
                 //float pw = 2.5;
                 //float ratio = pow(pw, dist_to_wall) / player_view_dist;
@@ -596,19 +858,28 @@ void gameLogic(double delta_time) {
                 //float factor = ratio;
 
                 //int height = POV_ROWS * (1 - factor);
-                int height = scr.POV_ROWS - scr.POV_ROWS * (dist_to_wall / player_view_dist);
+                //*/
+                int height = scr.POV_ROWS - scr.POV_ROWS * ratio;
+                /*/
+                
+                int height = 1 / dist_to_wall * scr.POV_ROWS ;
+
+                //*/
+
                 int half_h = height / 2;
 
                 int half_r = scr.POV_ROWS / 2;
 
                 float brightness = height / (float)scr.POV_ROWS;
                 // Draw wall
-                for (int y = half_r - half_h; y < half_r + half_h + 1; ++y) {
+                for (int y = half_r - half_h; y < half_r + half_h; ++y) {
                     draw_POV(i, y, pixel_mulf(wallcol, brightness));
                 }
             }
         }
-    }
+    
+#endif
+}
 
 
     // Cast a ray in the direction the player is moving to detect collision with wall

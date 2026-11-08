@@ -15,6 +15,7 @@ typedef struct {
 
 Pixel pixel_mulf(Pixel p, float f)
 {
+    f = fmax(fmin(f, 1.f), 0.f);
     p.r *= f;
     p.g *= f;
     p.b *= f;
