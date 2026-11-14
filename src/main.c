@@ -1,21 +1,24 @@
 #include <stdio.h>
+#include<stdarg.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
 
-
 #include "glad/glad.h"
 #include "GLFW/glfw3.h"
 
 #include "vec2.h"
+
 #include "texture_buffer.h"
 #include "game_map.h"
 
+VEC2_DEF(f, float)
+VEC2_DEF(i, int)
 
-#define TOP_VIEW_PIX_W 4
-#define TOP_VIEW_PIX_H 4
+VEC2_IMPL(f, float, i, int, "(%.2f, %.2f)")
+VEC2_IMPL(i, int, f, float,  "(%d, %d)")
 
 
 #define M_PI   3.14159265358979323846264338327950288
@@ -30,102 +33,99 @@
 * map - integer coordinates in map
 */
 
-#define map_to_tv_x(x) ((x) / gm.dim * scr.TOP_VIEW_COLS)
-#define map_to_tv_y(y) ((y) / gm.dim * scr.TOP_VIEW_ROWS)
+#define map_to_tv_x(x) ((float)(x) / GAME_MAP.dim * scr.TOP_VIEW_COLS)
+#define map_to_tv_y(y) ((float)(y) / GAME_MAP.dim * scr.TOP_VIEW_ROWS)
 
-#define tv_to_map_x(x) ((x) / (float)scr.TOP_VIEW_COLS * gm.dim)
-#define tv_to_map_y(y) ((y) / (float)scr.TOP_VIEW_ROWS * gm.dim)
+#define tv_to_map_x(x) ((x) / (float)scr.TOP_VIEW_COLS * GAME_MAP.dim)
+#define tv_to_map_y(y) ((y) / (float)scr.TOP_VIEW_ROWS * GAME_MAP.dim)
 
+
+// Size of a minimap pixel in screen pixels
+static Vec2i minimap_pix_dim = { 4, 4 };
+
+static Vec2i pov_pix_dim = { 4, 4 };
 
 typedef struct {
-    int POV_PIX_W;
-    int POV_PIX_H;
+    // Size of a display pixel in actual screen pixels
+    Vec2i pix_dim;
 
-    int TOP_VIEW_ROWS;
-    int TOP_VIEW_COLS;
+    // Holds the GL texture and resolution
+    TextureBuffer tex_buf; // TODO: hold a pointer?
 
-    int POV_ROWS;
-    int POV_COLS;
+    Pixel clear_color;
+} Display;
 
-    int SCR_WIDTH;
-    int SCR_HEIGHT;
+static void display_update(Display* display, Vec2i screen_resolution);
 
-    float PLAYER_FOV;
+static Display display_create(Vec2i pix_dim, Vec2i screen_resolution, Pixel clear_color) {
+    Display d;
+    d.pix_dim = pix_dim;
+    d.clear_color = clear_color;
+    textureBuffer_init(&d.tex_buf);
 
-    // Step angle diff between two rays in radians
-    float RAY_ANGLE_STEP; // theta
-    
-} Screen;
-
-static float RAY_STEP_COS;
-static float RAY_STEP_SIN;
-
-static void screen_set_pov_cols(Screen* scr, int pov_cols) {
-    scr->POV_COLS = pov_cols;
-    scr->RAY_ANGLE_STEP = degToRad( scr->PLAYER_FOV / scr->POV_COLS );
-
-    RAY_STEP_COS = cos(scr->RAY_ANGLE_STEP);
-    RAY_STEP_SIN = sin(scr->RAY_ANGLE_STEP);
+    display_update(&d, screen_resolution);
+    return d;
 }
 
-static void screen_reset(Screen* scr, int width, int height)
+static Display s_Minimap_display;
+static Display s_Pov_display;
+
+static bool s_Is_display_minimap;
+
+#define TILE_SIZE_UNITS 1.f
+
+static Vec2f map_to_world(int x, int y) {
+    return (Vec2f) { 
+        x * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f, 
+        y * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f
+    };
+}
+
+static Vec2f map_to_world_v(Vec2i v) {
+    return (Vec2f) { 
+        v.x * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f, 
+        v.y * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f
+    };
+}
+
+static Vec2i world_to_map(Vec2f v) {
+    return (Vec2i) {
+        v.x / TILE_SIZE_UNITS,
+        v.y / TILE_SIZE_UNITS
+    };
+}
+
+// Actual screen resolution in pixels
+static Vec2i s_Screen_resolution;
+
+static float PLAYER_FOV = 66.f; // degrees
+
+#define LOG(_Type, _Format, ...) printf("[%s]: %s: " _Format "\n", __func__, _Type, __VA_ARGS__)
+
+#define LOG_WARN(_Format, ...) LOG("WARNING", _Format, __VA_ARGS__)
+#define LOG_ERR(_Format, ...)  LOG("ERROR",   _Format, __VA_ARGS__)
+#define LOG_INFO(_Format, ...) LOG("INFO",    _Format, __VA_ARGS__)
+
+
+/* 
+* @param screen_resolution should be already aligned to pixel dim, 
+*                           otherwise display may not take the whole screen space
+* */
+static void display_update(Display* display, Vec2i screen_resolution)
 {
-    // At least 4, if a texel should be bigger, then round to more
-    // Mutpily by 2 to avoid having texture of uneven dimensions (probably bad for OpenGL?)
-    static int screen_round_to = max(max(TOP_VIEW_PIX_W * 2, TOP_VIEW_PIX_H * 2), 4);
+    assert(!(display->pix_dim.x % 2) && !(display->pix_dim.y % 2) && "Pix dim must be even");
 
-    // Window dimensions must be aligned to multiple of 2 
-    // because OpenGL doesn't correctly display textures with dimensions unaligned to 2
-    if (width != scr->SCR_WIDTH && width % screen_round_to != 0) {
-        if (width > scr->SCR_WIDTH) {
-            width += screen_round_to - width % screen_round_to;
-        } else {
-            width -= width % screen_round_to;
-        }
-    }
-
-    if (height != scr->SCR_HEIGHT && height % screen_round_to != 0) {
-        if (height > scr->SCR_HEIGHT) {
-            height += screen_round_to - height % screen_round_to;
-        } else {
-            height -= height % screen_round_to;
-        }
-    }
-
-    scr->SCR_WIDTH = width * 2;
-    scr->SCR_HEIGHT = height;
-
-    scr->TOP_VIEW_COLS = width / TOP_VIEW_PIX_W;
-    scr->TOP_VIEW_ROWS = height / TOP_VIEW_PIX_H;
-
-    float new_pov_cols = width / TOP_VIEW_PIX_W;
-    screen_set_pov_cols(scr, new_pov_cols);
-    //scr->POV_COLS = width / TOP_VIEW_PIX_W;
-    scr->POV_ROWS = height / TOP_VIEW_PIX_H;
-
-    printf("Screen WIDTH: %d\n", scr->SCR_WIDTH);
-    printf("Screen HEIGHT: %d\n", scr->SCR_HEIGHT);
-    printf("\n\n");
-
-
-    /*textureBuffer_reset(&top_view_tb, scr->TOP_VIEW_COLS, scr->TOP_VIEW_ROWS);
-    textureBuffer_reset(&pov_tb, scr->POV_COLS, scr->POV_ROWS);*/
+    textureBuffer_reset(
+        &display->tex_buf,
+        screen_resolution.x / display->pix_dim.x,
+        screen_resolution.y / display->pix_dim.y
+    );
 }
 
-Screen scr = {
-    .TOP_VIEW_ROWS = 128,
-    .TOP_VIEW_COLS = 128,
-    .PLAYER_FOV = 66, // degrees
-};
+static GLFWwindow* s_Window = NULL;
 
+static GameMap GAME_MAP;
 
-GLFWwindow* window = NULL;
-static TextureBuffer top_view_tb; // top view (left side of the screen)
-static TextureBuffer pov_tb; // first-person view (right side of the screen)
-
-static GameMap gm;
-
-static Pixel TOP_CLEAR_COLOR;
 static Pixel POV_CLEAR_COLOR;
 
 void glfw_error_callback(int error, const char* description) 
@@ -190,7 +190,11 @@ void APIENTRY glDebugOutput(GLenum source,
 
 
 
-
+static int round_to(int src, int val, bool up) {
+    return up 
+        ? src + val - src % val 
+        : src - src % val;
+}
 
 
 
@@ -199,24 +203,33 @@ void APIENTRY glDebugOutput(GLenum source,
 // ---------------------------------------------------------------------------------------------
 void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
-    // make sure the viewport matches the new window dimensions; note that width and 
-    // height will be significantly larger than specified on retina displays.
-    glViewport(0, 0, width, height);
+    Vec2i pixel_dim = s_Is_display_minimap ? s_Minimap_display.pix_dim : s_Pov_display.pix_dim;
+    assert(!(pixel_dim.x % 2) && !(pixel_dim.y % 2) && "Pix dim must be even");
 
-    screen_reset(&scr, width, height);
-    textureBuffer_reset(&top_view_tb, scr.TOP_VIEW_COLS, scr.TOP_VIEW_ROWS);
-    textureBuffer_reset(&pov_tb, scr.POV_COLS, scr.POV_ROWS);
+    // Round up/down to pix
+    s_Screen_resolution = (Vec2i){ 
+        round_to(width , pixel_dim.x, s_Screen_resolution.x < width),
+        round_to(height, pixel_dim.y, s_Screen_resolution.y < height)
+    };
+
+    glViewport(0, 0, s_Screen_resolution.x, s_Screen_resolution.y);
+
+    if (s_Is_display_minimap) {
+        display_update(&s_Minimap_display, s_Screen_resolution);
+    } else {
+        display_update(&s_Pov_display, s_Screen_resolution);
+    }
+}
+
+static void toggle_minimap(bool minimap) {
+    if (minimap) {
+
+    }
 }
 
 
-static double MOUSE_X_SCREEN_SPACE = 0;
-static double MOUSE_Y_SCREEN_SPACE = 0;
-
-static double MOUSE_X_TEX_SPACE = 0;
-static double MOUSE_Y_TEX_SPACE = 0;
-
-static double MOUSE_DELTA_X = 0;
-static double MOUSE_DELTA_Y = 0;
+static float MOUSE_DELTA_X = 0;
+static float MOUSE_DELTA_Y = 0;
 
 static double theta = 0;
 
@@ -224,28 +237,20 @@ static bool must_update_player_look_dir = false;
 
 static void glfw_cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 {
-    static double prev_x = 0;
-    static double prev_y = 0;
+    static float prev_x = 0;
+    static float prev_y = 0;
 
     must_update_player_look_dir = true;
     
     //printf("Position: (%f:%f)\n", xpos, ypos);
-    //MOUSE_X_SCREEN_SPACE = xpos * 2; // Mult by 2 to anchor mouse pos relative to top view
-    MOUSE_X_SCREEN_SPACE = xpos; // Mult by 2 to anchor mouse pos relative to top view
-    MOUSE_Y_SCREEN_SPACE = ypos;
 
-    MOUSE_X_TEX_SPACE = MOUSE_X_SCREEN_SPACE / scr.SCR_WIDTH * scr.TOP_VIEW_COLS;
-    MOUSE_Y_TEX_SPACE = MOUSE_Y_SCREEN_SPACE / scr.SCR_HEIGHT * scr.TOP_VIEW_ROWS;
-
-    MOUSE_DELTA_X = xpos - prev_x;
-    MOUSE_DELTA_Y = ypos - prev_y;
+    MOUSE_DELTA_X = (float)xpos - prev_x;
+    MOUSE_DELTA_Y = (float)ypos - prev_y;
 
     //printf("Delta_X: (%lf)\n", MOUSE_DELTA_X);
 
-    
-
-    prev_x = xpos;
-    prev_y = ypos;
+    prev_x = (float)xpos;
+    prev_y = (float)ypos;
 }
 
 
@@ -260,6 +265,10 @@ char* readShaderSource(const char* filepath) {
     // Get the size of the file
     fseek(fd, 0, SEEK_END);
     long filesize = ftell(fd);
+    if (filesize < 0) {
+        perror("ftell(...) failed");
+        exit(EXIT_FAILURE);
+    }
     fseek(fd, 0, SEEK_SET);
 
     // Allocate memory for the buffer
@@ -271,7 +280,7 @@ char* readShaderSource(const char* filepath) {
     }
 
     // Read the file into the buffer
-    size_t result = fread(buffer, 1, filesize, fd);
+    size_t result = fread(buffer, sizeof(*buffer), filesize, fd);
     if (result != filesize)
     {
         printf("Failed to read file\n");
@@ -286,33 +295,25 @@ char* readShaderSource(const char* filepath) {
     return buffer;
 }
 
-#define TILE_SIZE 1
-
-#define TILE_STEPS 10
 
 static int NUM_STEPS;
 
-//static const int STEP = TILE_SIZE / TILE_STEPS;
-//
-//static const float dist_to_near_plane = 0.2; // equals to half plane width means 45 degree FOV
-//static const float near_plane_width = 0.4;
-
 static float plane_width;
-//static float plane_dist = 4;
 
 //static const int supersampling = 32;
 
-static const float stop_dist = 0.1;
+static const float stop_dist = 0.1f;
 
-static const float mov_speed = 3;
+static const float mov_speed = 3.f;
 
 // Step angle diff between two rays in radians
 static float RAY_ANGLE_STEP;
 
+static Vec2f player_world;
 // Coordinates of player in map
-static Vec2 player = {2, 3};
+static Vec2i player_map = { 2, 3 };
 
-static Vec2 player_look_dir = {0, 1};
+static Vec2f player_look_dir = {0, 1};
 
 static Pixel BLACK = { 0,  0,  0 };
 static Pixel RED   = { 255, 0, 0 };
@@ -332,72 +333,44 @@ static Pixel NEAREST_PLANE_COLOR;
 } while(0)
 
 #define draw_POV(x, y, pix) do {\
-    textureBuffer_setPixel(&pov_tb, (x), (y), (pix)); \
+    textureBuffer_setPixel(&s_Pov_display.tex_buf, (x), (y), (pix)); \
 } while(0)
 
 
-void globals_Init()
+static void globals_Init()
 {
     PLAYER_COLOR = RED;
     NEAREST_PLANE_COLOR = MAGENTA;
 
+    plane_width = (float)tan(degToRad(PLAYER_FOV / 2.0));
+    player_world = map_to_world_v(player_map);
 
-    //plane_width = plane_dist * tan(degToRad(scr.PLAYER_FOV / 2.0)) * 2.0;
+    s_Screen_resolution = (Vec2i){ 512, 512 };
 
-    plane_width = tan(degToRad(scr.PLAYER_FOV / 2.0));
-
-
-
-    //POV_COLS = plane_width * supersampling;
-    screen_set_pov_cols(&scr, 128);
-    scr.POV_ROWS = scr.POV_COLS;
-
-    int half_screen_w = scr.TOP_VIEW_COLS * TOP_VIEW_PIX_W;
-
-    scr.POV_PIX_W = half_screen_w / scr.POV_COLS;
-    scr.POV_PIX_H = scr.POV_PIX_W;
-
-    scr.SCR_WIDTH = scr.TOP_VIEW_COLS * TOP_VIEW_PIX_W * 2;
-    scr.SCR_HEIGHT = scr.TOP_VIEW_ROWS * TOP_VIEW_PIX_H;
-
-    NUM_STEPS = TILE_STEPS * gm.dim;
-
-    TOP_CLEAR_COLOR = BLACK;
-    POV_CLEAR_COLOR = BLACK;
+    s_Minimap_display = display_create((Vec2i){ 4, 4 }, s_Screen_resolution, BLACK);
+    s_Pov_display = display_create((Vec2i) { 4, 4 }, s_Screen_resolution, BLACK);
 }
 
-
-
-void processInput(GLFWwindow* window, double delta_time) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-        glfwSetWindowShouldClose(window, true);
-    }
-}
-
-
-
-
-void drawNearestPlane(Vec2 player_pos_pixel_space, Vec2 player_look_dir)
+#ifdef MINIMAP
+static void drawNearestPlane(Vec2i player_pos_pixel_space, Vec2f player_look_dir)
 {
-    Vec2 plane_dir = vec2_perpendicular(player_look_dir);
-    //Vec2 plane_center = vec2_muli(player_look_dir, plane_dist);
-    Vec2 plane_center = player_pos_pixel_space;
-
+    Vec2f plane_dir = vec2f_perpendicular(player_look_dir);
+    Vec2f plane_center = { (float)player_pos_pixel_space.x, (float)player_pos_pixel_space.y };
 
     for (float i = -plane_width / 2; i < plane_width / 2 + 1; i += 1) {
-        // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
+        // Vec2f vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
 
-        Vec2 plane_dir_advanced = vec2_mulf(plane_dir, i);
+        Vec2f plane_dir_advanced = vec2f_muls(plane_dir, i);
 
-        Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
+        Vec2f plane_next = vec2f_add(plane_center, plane_dir_advanced);
 
-        Vec2 vpl = vec2_add(player_pos_pixel_space, plane_next);
+        Vec2f vpl = vec2f_add(plane_center, plane_next);
 
-        draw_TV(vpl.x, vpl.y, NEAREST_PLANE_COLOR);
+        draw_TV((int)vpl.x, (int)vpl.y, NEAREST_PLANE_COLOR);
     }
 }
 
-void drawPlayer(Vec2 player_pos_pixel_space)
+static void drawPlayer(Vec2f player_pos_pixel_space)
 {
     for (int i = -1; i < 2; ++i) {
         for (int j = -1; j < 2; ++j) {
@@ -405,80 +378,82 @@ void drawPlayer(Vec2 player_pos_pixel_space)
         }
     }
 }
+#endif
 
+static void gameLogic(float delta_time, bool check_any_input) {
+    if (glfwGetKey(s_Window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        glfwSetWindowShouldClose(s_Window, true);
+        return;
+    }
 
+    double delta_x = 0; 
+    double delta_y = 0;
 
-void gameLogic(double delta_time) {
-
-    float delta_x = 0; 
-    float delta_y = 0;
-
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+    if (glfwGetKey(s_Window, GLFW_KEY_W) == GLFW_PRESS) {
         delta_y -= mov_speed * delta_time;
     }
 
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+    if (glfwGetKey(s_Window, GLFW_KEY_A) == GLFW_PRESS) {
         delta_x -= mov_speed * delta_time;
     }
 
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+    if (glfwGetKey(s_Window, GLFW_KEY_S) == GLFW_PRESS) {
         delta_y += mov_speed * delta_time;
     }
 
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+    if (glfwGetKey(s_Window, GLFW_KEY_D) == GLFW_PRESS) {
         delta_x += mov_speed * delta_time;
     }
 
-    bool was_any_input = delta_x || delta_y || must_update_player_look_dir;
+    bool was_any_input = !check_any_input || delta_x || delta_y || must_update_player_look_dir;
     if (!was_any_input) {
       return;
     }
 
-
-    /*player_look_dir.x = MOUSE_X_TEX_SPACE - player_pos_pixel_space.x;
-    player_look_dir.y = MOUSE_Y_TEX_SPACE - player_pos_pixel_space.y;*/
     if (must_update_player_look_dir) {
-        //theta += MOUSE_DELTA_X * delta_time;
-
-        //player_look_dir.x = cos(theta);
-        //player_look_dir.y = sin(theta);
-
-        //player_look_dir = vec2_normalized(player_look_dir);
-
         float rotSpeed = MOUSE_DELTA_X * delta_time;
-        rotSpeed = -rotSpeed;
-        double oldDirX = player_look_dir.x;
-        player_look_dir.x = player_look_dir.x * cos(-rotSpeed) - player_look_dir.y * sin(-rotSpeed);
-        player_look_dir.y = oldDirX * sin(-rotSpeed) + player_look_dir.y * cos(-rotSpeed);
-        //double oldPlaneX = planeX;
-        //planeX = planeX * cos(-rotSpeed) - planeY * sin(-rotSpeed);
-        //planeY = oldPlaneX * sin(-rotSpeed) + planeY * cos(-rotSpeed);
+        float oldDirX = player_look_dir.x;
+        player_look_dir.x = player_look_dir.x * cosf(rotSpeed) - player_look_dir.y * sinf(rotSpeed);
+        player_look_dir.y = oldDirX * sinf(rotSpeed) + player_look_dir.y * cosf(rotSpeed);
 
         must_update_player_look_dir = false;
     }
 
-    Vec2 plane_dir = vec2_perpendicular(player_look_dir);
+    Vec2f plane_dir = vec2f_perpendicular(player_look_dir);
 
+    /*
     printf("\n", player_look_dir.x, player_look_dir.y);
     printf("player_look_dir: %f, %f\n", player_look_dir.x, player_look_dir.y);
     printf("plane_dir: %f, %f\n", plane_dir.x, plane_dir.y);
+    */
 
-    Vec2 addx = vec2_mulf(plane_dir, delta_x);
-    Vec2 addy = vec2_mulf(player_look_dir, -delta_y);
+    if(delta_x || delta_y) {
+        Vec2f addx = vec2f_muls(plane_dir, (float)delta_x);
+        Vec2f addy = vec2f_muls(player_look_dir, (float)-delta_y);
 
-    Vec2 player_delta_pos = vec2_add(addx, addy);
+        Vec2f player_delta_pos = vec2f_divs(vec2f_add(addx, addy), TILE_SIZE_UNITS);
 
-    player = vec2_add(player, player_delta_pos);
+        Vec2f player_world_next = vec2f_add(player_world, player_delta_pos);
 
-    Vec2 player_pos_pixel_space = { map_to_tv_x(player.x), map_to_tv_x(player.y) };
+        Vec2i player_map_next = world_to_map(player_world_next);
 
+        if (
+          !(gameMap_get_tile(&GAME_MAP, player_map_next.x, player_map_next.y) & GM_NON_WALKABLE_MASK)
+        ) {
+           player_map = player_map_next;
+           player_world = player_world_next;
+        } 
+    }
+
+#ifdef MINIMAP
+    Vec2i player_pos_minimap = { map_to_tv_x(player_map.x), map_to_tv_x(player_map.y) };
+#endif
+
+     
 
     /*player.x += ;
     player.y += delta_y;*/
     
-    Pixel ldcol   = YELLOW;
-    
-    Pixel raycol  = GREEN;
     Pixel wallcol = RED;
 
     Pixel ceilcol = GREEN;
@@ -489,60 +464,25 @@ void gameLogic(double delta_time) {
     
 
     //int num_rays = plane_width * supersampling;
-    int num_rays = scr.POV_COLS;
+    int pov_rows = s_Pov_display.tex_buf.height;
+    int pov_cols = s_Pov_display.tex_buf.width;
     
-    //float i_step = 1 / (float)supersampling;
-    //int ray_len = 50;
-    float ray_step = 0.1;
-    int num_ray_steps = scr.TOP_VIEW_ROWS / ray_step;
+    for (int i = 0; i < pov_cols; ++i) {
+        // Draw floor and ceiling
+        {
+            int half_r = pov_rows / 2;
+            // TODO: use setColumn func
+            // Floor
+            for (int y = 0; y < half_r + 1; ++y) {
+                draw_POV(i, y, pixel_mulf(floorcol, 1));
+            }
+            // Ceilling
+            for (int y = half_r + 1; y < pov_rows; ++y) {
+                draw_POV(i, y, pixel_mulf(ceilcol, 1));
+            }
+        }
 
-    int player_view_dist = scr.TOP_VIEW_ROWS;
-    float stop_dist = 5;
-
-    bool player_stop = false;
-
-    //Vec2 plane_center_offset = vec2_mulf(player_look_dir, plane_dist);
-    //Vec2 plane_center = vec2_add(player_pos_pixel_space, plane_center_offset);
-    Vec2 plane_center = player_pos_pixel_space;
-
-#if 0
-    // Rotate fully to the left of pov 
-    float half_pov = scr.PLAYER_POV / 2.f;
-    float cos_start = cos(degToRad(-half_pov));
-    float sin_start = sin(degToRad(-half_pov));
-
-
-    //for (float i = -plane_width / 2; i < plane_width / 2 + 1; i += 1) {
-    //  // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
-
-    //  Vec2 plane_dir_advanced = vec2_mulf(plane_dir, i);
-
-    //  Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
-
-    //  Vec2 vpl = vec2_add(player_pos_pixel_space, plane_next);
-
-    //  draw_TV(vpl.x, vpl.y, NEAREST_PLANE_COLOR);
-    //}
-
-    //Vec2 ray_start = vec2_subf(player, sin_start);
-    //ray_start = vec2_add(ray_start, player_look_dir);
-
-
-    float ray_x = player_look_dir.x * cos_start - player_look_dir.y * sin_start;
-    float ray_y = player_look_dir.x * sin_start + player_look_dir.y * cos_start;
-
-    Vec2 rayd = { ray_x, ray_y };
-    Vec2 ray_origin = player_pos_pixel_space; // TODO: origin has to be on the plane
-#endif
-
-    // Left to right
-    Vec2 plane_dir_neg = vec2_inv(plane_dir);
-    // Plane dir is right to left (TODO: change that?)
-    Vec2 plane_left = vec2_add(plane_center, vec2_mulf(plane_dir_neg, plane_width / 2));
-
-    //for (float i = -plane_width/2; i < plane_width/2+1; i += i_step) {
-    for (int i = 0; i < num_rays; ++i) {
-        // Vec2 vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
+        // Vec2f vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
 
         double dirX = player_look_dir.x;
         double dirY = player_look_dir.y;
@@ -551,52 +491,18 @@ void gameLogic(double delta_time) {
         double planeY = plane_dir.y * plane_width;
 
         //calculate ray position and direction
-        double cameraX = 2 * i / (double)num_rays - 1; //x-coordinate in camera space
+        double cameraX = 2 * i / (double)pov_cols - 1; //x-coordinate in camera space
         double rayDirX = dirX + planeX * cameraX;
         double rayDirY = dirY + planeY * cameraX;
 
-        printf("rayDir: %f, %f\n", rayDirX, rayDirY);
+        //printf("rayDir: %f, %f\n", rayDirX, rayDirY);
 
-#if 0
-        assert(num_rays > 0);
-        float progress = plane_width / (num_rays - 1) * i; // TODO: add 0.5 in the middle or interval
-        Vec2 ray_origin =
-          //vec2_add(
-          vec2_add( // on plane line
-            plane_left,
-            vec2_mulf(plane_dir, progress)
-          );//,
-            //player_look_dir
-         // );
-#endif
-
-        //Vec2 rayd = vec2_sub(ray_origin, player_pos_pixel_space);
-        //rayd = vec2_normalized(rayd);
-
-
-        /*Vec2 plane_center = vec2_mulf(player_look_dir, plane_dist);
-
-        float half_pw = plane_width / 2.f;
-        float adv = -half_pw + i / (float)num_rays * plane_width;
-
-        Vec2 plane_dir_advanced = vec2_mulf(plane_dir, adv);
-
-        Vec2 plane_next = vec2_add(plane_center, plane_dir_advanced);
-
-        Vec2 ray_origin = vec2_add(player_pos_pixel_space, plane_next);*/
-
-        //Draw(vpl.x, vpl.y, nearest_plane_col);
-        
-      
-#define DDA
-#ifdef DDA
-
-        float posX = player.x;
-        float posY = player.y;
+        float posX = player_world.x;
+        float posY = player_world.y;
 
         //which box of the map we're in
-        int mapX = (int)posX;
-        int mapY = (int)posY;
+        int mapX = player_map.x;
+        int mapY = player_map.y;
 
         //length of ray from current position to next x or y-side
         double sideDistX;
@@ -621,26 +527,14 @@ void gameLogic(double delta_time) {
 
         double perpWallDist;
 
-        // Draw floor and ceiling
-        {
-          int half_r = scr.POV_ROWS / 2;
-
-          // Floor
-          for (int y = 0; y < half_r + 1; ++y) {
-            draw_POV(i, y, pixel_mulf(floorcol, 1));
-          }
-          // Ceilling
-          for (int y = half_r + 1; y < scr.POV_ROWS; ++y) {
-            draw_POV(i, y, pixel_mulf(ceilcol, 1));
-          }
-        }
+        
 
         //what direction to step in x or y-direction (either +1 or -1)
         int stepX;
         int stepY;
 
         int hit = 0; //was there a wall hit?
-        int side; //was a NS or a EW wall hit?
+        int side = 0; //was a NS or a EW wall hit?
         //calculate step and initial sideDist
         if (rayDirX < 0)
         {
@@ -678,14 +572,14 @@ void gameLogic(double delta_time) {
 
           // Don't go out of map bounds
           if (mapX < 0.f || mapY < 0.f ||
-            mapX > gm.dim || mapY > gm.dim) {
+            mapX > GAME_MAP.dim || mapY > GAME_MAP.dim) {
             break;
           }
 
-          assert(mapX >= 0 && mapX <= gm.dim);
-          assert(mapY >= 0 && mapY <= gm.dim);
+          assert(mapX >= 0 && mapX <= GAME_MAP.dim);
+          assert(mapY >= 0 && mapY <= GAME_MAP.dim);
 
-          int tile = gm.map[mapX + gm.dim * mapY];
+          int tile = GAME_MAP.map[mapX + GAME_MAP.dim * mapY];
 
           //Check if ray has hit a wall
           if (tile > 0) {
@@ -714,7 +608,7 @@ void gameLogic(double delta_time) {
 
         //int height = POV_ROWS * (1 - factor);
                //*/
-        int wall_height = scr.POV_ROWS / perpWallDist;
+        int wall_height = (int)(pov_rows / perpWallDist);
         /*/
 
         int height = 1 / dist_to_wall * scr.POV_ROWS ;
@@ -723,183 +617,48 @@ void gameLogic(double delta_time) {
 
         int half_h = wall_height / 2;
 
-        int half_r = scr.POV_ROWS / 2;
+        int half_r = pov_rows / 2;
 
-        float brightness = wall_height / (float)scr.POV_ROWS;
+        float brightness = wall_height / (float)pov_rows;
 
         wallcol = side > 0 ? RED : BLUE;
         // Draw wall
-        for (int y = half_r - half_h; y < half_r + half_h; ++y) {
+
+        /*textureBuffer_setColumn_color(
+            &s_Pov_display.tex_buf, 
+            i, 
+            max(half_r - half_h, 0), 
+            min(wall_height, pov_rows), 
+            pixel_mulf(wallcol, brightness)
+        );*/
+
+        for (int y = max(half_r - half_h, 0); y < min(half_r + half_h, pov_rows); ++y) {
           draw_POV(i, y, pixel_mulf(wallcol, brightness));
         }
 
 
-#else
 
-
-
-
-#if 0
-        if (i > 0) {
-            // Rotate ray to next step
-            ray_x = rayd.x * RAY_STEP_COS - rayd.y * RAY_STEP_SIN;
-            ray_y = rayd.x * RAY_STEP_SIN + rayd.y * RAY_STEP_COS;
-
-            rayd.x = ray_x;
-            rayd.y = ray_y;
-
-            // TODO: is already normalized?
-            rayd = vec2_normalized(rayd);
-        }
-#endif
-        
-        // Draw floor and ceiling
-        {
-            int half_r = scr.POV_ROWS / 2;
-
-            // Floor
-            for (int y = 0; y < half_r + 1; ++y) {
-                draw_POV(i, y, pixel_mulf(floorcol, 1));
-            }
-            // Ceilling
-            for (int y = half_r + 1; y < scr.POV_ROWS; ++y) {
-                draw_POV(i, y, pixel_mulf(ceilcol, 1));
-            }
-        }
-
-        bool hit = false;
-        int j = 0;
-        for (; j < num_ray_steps && !hit; ++j) {
-
-            //Vec2 rayp = vpy + rayd * j * ray_step;
-            Vec2 ray_dir_advanced = vec2_mulf(rayd, j*ray_step);
-            //Vec2 rayp = vec2_add(player_pos_pixel_space, ray_dir_advanced);
-            Vec2 rayp = vec2_add(ray_origin, ray_dir_advanced);
-
-            
-
-            draw_TV(rayp.x, rayp.y, raycol);
-
-
-            Vec2 tilep = { tv_to_map_x(rayp.x), tv_to_map_y(rayp.y) };
-
-
-            int tile_x = tilep.x;
-            int tile_y = tilep.y;
-
-            // Don't go out of map bounds
-            if (tile_x < 0.f    || tile_y < 0.f     ||
-                tile_x > gm.dim || tile_y > gm.dim) {
-                break;
-            }
-
-            assert(tile_x >= 0 && tile_x <= gm.dim);
-            assert(tile_y >= 0 && tile_y <= gm.dim);
-                
-            int tile = gm.map[tile_x + gm.dim * tile_y];
-            hit = tile != 0;
-            if (hit) {
-                draw_TV(rayp.x, rayp.y, wallcol);
-
-                //int pov_y = POV_ROWS / 2;
-                
-
-                //Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
-                Vec2  origin_to_wall = vec2_sub(rayp, ray_origin);
-                float dist_to_wall   = vec2_magnitude(origin_to_wall);
-                //if (dist_to_wall < stop_dist) { // stop
-                //    player_stop = true;
-                //}
-
-                //*/
-                // Correct fish-eye distortion: use perpendicular distance to the wall plane
-                // Get cos by dot product since both rays are normalized
-                float cosT = rayd.x * player_look_dir.x + rayd.y * player_look_dir.y;
-                dist_to_wall *= cosT;
-                /*/
-
-                // hit point
-                float x0 = rayp.x;
-                float y0 = rayp.y;
-
-                float x1 = plane_center.x;
-                float y1 = plane_center.y;
-
-                float vx = plane_dir.x;
-                float vy = plane_dir.y;
-
-                float denom = 1;
-
-                float num = vx * (y1 - y0) - vy * (x1 - x0);
-
-                dist_to_wall = num / denom;
-
-                //*/
-
-#if 0                
-                Vec2 plane_ray_projection = vec2_addf(plane_left, progress);
-
-                float prpdc =   // plane_ray_projection_dist_from_center
-                  vec2_magnitude(vec2_sub(plane_center, plane_ray_projection));
-
-                float plane_distance = sqrt(dist_to_wall * dist_to_wall - prpdc * prpdc);
-                float ratio = plane_distance / player_view_dist;
-
-#else 
-                float ratio = dist_to_wall / player_view_dist;
-#endif
-                //float pw = 2.5;
-                //float factor = pow(pw, 1+ratio) - pw;
-                //float factor = ratio;
-
-                //float pw = 2.5;
-                //float ratio = pow(pw, dist_to_wall) / player_view_dist;
-                ////float factor = pow(pw, 1 + ratio) - pw;
-                //float factor = ratio;
-
-                //int height = POV_ROWS * (1 - factor);
-                //*/
-                int height = scr.POV_ROWS - scr.POV_ROWS * ratio;
-                /*/
-                
-                int height = 1 / dist_to_wall * scr.POV_ROWS ;
-
-                //*/
-
-                int half_h = height / 2;
-
-                int half_r = scr.POV_ROWS / 2;
-
-                float brightness = height / (float)scr.POV_ROWS;
-                // Draw wall
-                for (int y = half_r - half_h; y < half_r + half_h; ++y) {
-                    draw_POV(i, y, pixel_mulf(wallcol, brightness));
-                }
-            }
-        }
-    
-#endif
 }
 
 
     // Cast a ray in the direction the player is moving to detect collision with wall
-#if 1
-    Vec2 player_move_dir = vec2_normalized(player_delta_pos);
+#if 0
+    Vec2f player_move_dir = vec2f_normalized(player_delta_pos);
 
     Pixel collision_ray_col = CYAN;
     int collision_ray_len = stop_dist * 10;
 
-    Vec2 rayd_coll = player_move_dir;
+    Vec2f rayd_coll = player_move_dir;
 
    
 
-    //printf("Moving in dir (%f, %f)   %f\n", rayd_coll.x, rayd_coll.y, vec2_magnitude(rayd_coll));
+    //printf("Moving in dir (%f, %f)   %f\n", rayd_coll.x, rayd_coll.y, vec2f_magnitude(rayd_coll));
 
     bool hit = false;
     for (int j = 0; j < collision_ray_len && !hit; ++j) {
 
-        Vec2 ray_dir_advanced = vec2_mulf(rayd_coll, j * ray_step);
-        Vec2 rayp = vec2_add(player_pos_pixel_space, ray_dir_advanced);
+        Vec2f ray_dir_advanced = vec2f_muls(rayd_coll, j * ray_step);
+        Vec2f rayp = vec2f_add(player_pos_minimap, ray_dir_advanced);
 
         if (rayp.x < 0.f || rayp.y < 0.f) {
             break;
@@ -908,14 +667,14 @@ void gameLogic(double delta_time) {
         draw_TV(rayp.x, rayp.y, collision_ray_col);
 
 
-        Vec2 tilep = { tv_to_map_x(rayp.x), tv_to_map_y(rayp.y) };
+        Vec2f tilep = { tv_to_map_x(rayp.x), tv_to_map_y(rayp.y) };
         assert(tilep.x < 11 && tilep.y < 11);
         assert(tilep.x > -1 && tilep.y > -1);
 
         int tile_x = tilep.x;
         int tile_y = tilep.y;
 
-        int tile = gm.map[tile_x + gm.dim * tile_y];
+        int tile = gameMap_get_tile(&GAME_MAP, tile_x, tile_y);
         hit = tile != 0;
         if (hit) {
             //drawTopView(rayp.x, rayp.y, wallcol);
@@ -923,41 +682,41 @@ void gameLogic(double delta_time) {
             //int pov_y = POV_ROWS / 2;
 
 
-            Vec2 player_to_wall = vec2_sub(rayp, player_pos_pixel_space);
-            float dist_to_wall = vec2_magnitude(player_to_wall);
+            Vec2f player_to_wall = vec2f_sub(rayp, player_pos_minimap);
+            float dist_to_wall = vec2f_magnitude(player_to_wall);
             if (dist_to_wall < stop_dist) { // stop
                 player_stop = true;
             }
         }
     }
 
-#endif
-
     if (player_stop) { // hit
-        player = vec2_sub(player, vec2_mulf(player_delta_pos, 1.1));
+        player_map = vec2f_sub(player_map, vec2f_muls(player_delta_pos, 1.1));
     }
 
+#endif
 
+#ifdef MINIMAP
     // Draw player
-    drawPlayer(player_pos_pixel_space);
+    drawPlayer(player_pos_minimap);
 
-    drawNearestPlane(player_pos_pixel_space, player_look_dir);
+    drawNearestPlane(player_pos_minimap, player_look_dir);
 
     // Draw player look dir
     for (int i = 0; i < 10; ++i) {
-        float ldx = player_pos_pixel_space.x + player_look_dir.x * i;
-        float ldy = player_pos_pixel_space.y + player_look_dir.y * i;
+        float ldx = player_pos_minimap.x + player_look_dir.x * i;
+        float ldy = player_pos_minimap.y + player_look_dir.y * i;
 
         draw_TV(ldx, ldy, ldcol);
     }
 
-
+#endif
 }
 
 static unsigned int VAO, VBO, EBO;
 static unsigned int shaderProgram;
 
-int opengl_init()
+static int opengl_init()
 {
     glfwSetErrorCallback(glfw_error_callback);
 
@@ -976,18 +735,18 @@ int opengl_init()
 
     // glfw window creation
     // --------------------
-    window = glfwCreateWindow(scr.SCR_WIDTH, scr.SCR_HEIGHT, "Raycaster", NULL, NULL);
-    if (window == NULL)
+    s_Window = glfwCreateWindow(s_Screen_resolution.x, s_Screen_resolution.y, "Raycaster", NULL, NULL);
+    if (s_Window == NULL)
     {
         printf("Failed to create GLFW window\n");
         glfwTerminate();
         return -1;
     }
-    glfwMakeContextCurrent(window);
-    glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
-    glfwSetCursorPosCallback(window, glfw_cursor_position_callback);
+    glfwMakeContextCurrent(s_Window);
+    glfwSetFramebufferSizeCallback(s_Window, glfw_framebuffer_size_callback);
+    glfwSetCursorPosCallback(s_Window, glfw_cursor_position_callback);
 
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(s_Window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
@@ -1068,32 +827,26 @@ int opengl_init()
     free(vertex_source);
     free(fragment_source);
 
+    // top right
+    // bottom right
+    // bottom left
+    // top left 
 
-    // set up vertex data (and buffer(s)) and configure vertex attributes
-    // ------------------------------------------------------------------
-    //float vertices[] = {
-    //    // positions        // texture coords
-    //     1.f,  1.f, 0.0f,   1.0f, 1.0f, // top right
-    //     1.f, -1.f, 0.0f,   1.0f, 0.0f, // bottom right
-    //    -1.f, -1.f, 0.0f,   0.0f, 0.0f, // bottom left
-    //    -1.f,  1.f, 0.0f,   0.0f, 1.0f  // top left 
-    //};
+    // Flip U and V axes since the texture buffer hold values in column major top-to-bottom
+    // bottom right becomes top left and vice versa
 
-    // Set u coordinate to 0 - 2 to make the texture repeat twice horizontally
     float vertices[] = {
         // positions        // texture coords
-         1.f,  1.f, 0.0f,   2.0f, 1.0f, // top right
-         1.f, -1.f, 0.0f,   2.0f, 0.0f, // bottom right
-        -1.f, -1.f, 0.0f,   0.0f, 0.0f, // bottom left
-        -1.f,  1.f, 0.0f,   0.0f, 1.0f  // top left 
+         1.f,  1.f, 0.0f,   1.0f, 1.0f, 
+         1.f, -1.f, 0.0f,   0.0f, 1.0f, // 1.0f, 0.0f, 
+        -1.f, -1.f, 0.0f,   0.0f, 0.0f, 
+        -1.f,  1.f, 0.0f,   1.0f, 0.0f  
     };
 
-
-    unsigned int indices[] = {  // note that we start from 0!
+    unsigned int indices[] = {
         0, 1, 3,  // first Triangle
         1, 2, 3   // second Triangle
     };
-
 
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
@@ -1128,53 +881,6 @@ int opengl_init()
     // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
     glBindVertexArray(0);
 
-
-
-    // load and create a texture 
-    // -------------------------
-
-    {
-        top_view_tb.gl_tex_unit = 0;
-        glActiveTexture(GL_TEXTURE0);
-
-        glGenTextures(1, &top_view_tb.gl_tex_id);
-        glBindTexture(GL_TEXTURE_2D, top_view_tb.gl_tex_id);
-        // set the texture wrapping parameters
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        // set texture filtering parameters
-        /*glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);*/
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, top_view_tb.width, top_view_tb.height, 0, GL_RGB, GL_UNSIGNED_BYTE, top_view_tb.data);
-
-        top_view_tb.gl_tex_init = true;
-    }
-    {
-        pov_tb.gl_tex_unit = 1;
-        glActiveTexture(GL_TEXTURE0 + 1);
-
-        glGenTextures(1, &pov_tb.gl_tex_id);
-        glBindTexture(GL_TEXTURE_2D, pov_tb.gl_tex_id);
-        // set the texture wrapping parameters
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        /*glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_NEVER);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_NEVER);*/
-        // set texture filtering parameters
-        /*glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);*/
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, pov_tb.width, pov_tb.height, 0, GL_RGB, GL_UNSIGNED_BYTE, pov_tb.data);
-
-        pov_tb.gl_tex_init = true;
-    }
-
-
     // tell opengl for each sampler to which texture unit it belongs to (only has to be done once)
     // -------------------------------------------------------------------------------------------
     glUseProgram(shaderProgram); // don't forget to activate/use the shader before setting uniforms!
@@ -1196,35 +902,36 @@ void opengl_cleanup()
 }
 
 
-void game_loop(double delta_time)
+void update(double delta_time, bool update_check)
 {
     // render
     // ------
     /*glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);*/
     {
-        top_view_tb.updated_this_frame = false;
-        textureBuffer_clear(&top_view_tb, TOP_CLEAR_COLOR);
-    }
-    {
-        pov_tb.updated_this_frame = false;
-        textureBuffer_clear(&pov_tb, POV_CLEAR_COLOR);
+        s_Pov_display.tex_buf.updated_this_frame = false;
+        s_Minimap_display.tex_buf.updated_this_frame = false;
     }
 
-    processInput(window, delta_time);
-    gameLogic(delta_time);
+    gameLogic((float)delta_time, update_check);
 
-    if (top_view_tb.updated_this_frame) {
-        textureBuffer_loadTexData(&top_view_tb);
-    }
-
-    if (pov_tb.updated_this_frame) {
-        textureBuffer_loadTexData(&pov_tb);
+    if (
+        !update_check || 
+        !s_Is_display_minimap && 
+        s_Pov_display.tex_buf.updated_this_frame
+    ) {
+        textureBuffer_loadTexData(&s_Pov_display.tex_buf);
+    } else if (
+        //!update_check || 
+        s_Is_display_minimap && 
+        s_Minimap_display.tex_buf.updated_this_frame
+    ) {
+        textureBuffer_loadTexData(&s_Minimap_display.tex_buf);
     }
 
     // draw
     glUseProgram(shaderProgram);
-    glBindVertexArray(VAO); // seeing as we only have a single VAO there's no need to bind it every time, but we'll do so to keep things a bit more organized
+    glBindVertexArray(VAO); 
     //glDrawArrays(GL_TRIANGLES, 0, 6);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 }
@@ -1233,37 +940,31 @@ int main(void)
 {
     globals_Init();
 
-
-    textureBuffer_init(&top_view_tb, scr.TOP_VIEW_COLS, scr.TOP_VIEW_ROWS);
-    textureBuffer_init(&pov_tb, scr.POV_COLS, scr.POV_ROWS);
-
     if (opengl_init() != 0) {
         return -1;
     }
 
-
-    if (gameMap_init(&gm, "maps/00.txt") != 0) {
+    if (gameMap_init(&GAME_MAP, "maps/00.txt") != 0) {
         return -1;
     }
 
-    
+    update(0, false);
 
-    
 
     // render loop
     // -----------
-    while (!glfwWindowShouldClose(window))
+    while (!glfwWindowShouldClose(s_Window))
     {
         static double delta_time;
 
         clock_t start = clock();
 
-        game_loop(delta_time);
+        update(delta_time, true);
         // glBindVertexArray(0); // no need to unbind it every time 
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(s_Window);
         glfwPollEvents();
 
         clock_t end = clock();

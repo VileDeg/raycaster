@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+//#define GM_WALL 1
+//#define GM_WALKABLE_MASK      0
+#define GM_NON_WALKABLE_MASK ~0
+
+/**
+ * Square map left-to-right row-major.
+ */
 typedef struct {
     int dim;
     int* map;
@@ -17,7 +24,7 @@ int gameMap_init(GameMap* gm, const char* map_filename) {
         return -1;
     }
 
-    if (fscanf(file, "%d", &gm->dim) != 1) {
+    if (fscanf_s(file, "%d", &gm->dim) != 1) {
         printf("Failed to read map dimensions\n");
         return -1;
     }
@@ -32,7 +39,7 @@ int gameMap_init(GameMap* gm, const char* map_filename) {
 
     for (int row = 0; row < gm->dim; row++) {
         for (int col = 0; col < gm->dim; col++) {
-            if (fscanf(file, "%d", &gm->map[i]) != 1)
+            if (fscanf_s(file, "%d", &gm->map[i]) != 1)
             {
                 printf("Failed to read number at row %d, column %d\n", row, col);
                 return -1;
@@ -52,6 +59,10 @@ int gameMap_init(GameMap* gm, const char* map_filename) {
 
     gm->initialized = true;
     return 0;
+}
+
+int gameMap_get_tile(GameMap* gm, int x, int y) {
+  return gm->map[y * gm->dim + x];
 }
 
 #endif // _GAME_MAP_H_
