@@ -22,13 +22,24 @@ typedef struct {
 #pragma warning(push)
 #pragma warning(disable: 4244)
 
-Pixel pixel_mulf(Pixel p, float f)
-{
+Pixel pixel_mulf(Pixel p, float f) {
     f = fmax(fmin(f, 1.f), 0.f);
     p.r *= f;
     p.g *= f;
     p.b *= f;
     return p;
+}
+
+Pixel pixel_from_uint(unsigned int v) {
+    Pixel p;
+    p.r = v >> 16 & 0xFF;
+    p.g = v >> 8  & 0xFF;
+    p.b = v       & 0xFF;
+    return p;
+}
+
+unsigned int pixel_to_uint(Pixel p) {
+    return (p.r << 16) + (p.g << 8) + p.b;
 }
 
 #pragma warning(pop)

@@ -13,6 +13,7 @@
  */
 typedef struct {
     int dim;
+    int num_textures;
     int* map;
     bool initialized;
 } GameMap;
@@ -36,17 +37,20 @@ int gameMap_init(GameMap* gm, const char* map_filename) {
     }
 
     int i = 0;
+    int max_tile = 0;
 
     for (int row = 0; row < gm->dim; row++) {
         for (int col = 0; col < gm->dim; col++) {
-            if (fscanf_s(file, "%d", &gm->map[i]) != 1)
-            {
+            if (fscanf_s(file, "%d", &gm->map[i]) != 1) {
                 printf("Failed to read number at row %d, column %d\n", row, col);
                 return -1;
             }
+
+            max_tile = max(max_tile, gm->map[i]);
             i++;
         }
     }
+    gm->num_textures = max_tile;
 
     fclose(file);
 

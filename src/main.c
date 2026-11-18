@@ -74,6 +74,12 @@ static bool s_Is_display_minimap;
 
 #define TILE_SIZE_UNITS 1.f
 
+#define MAX_TEXTURES 32
+
+#define TEX_WIDTH  32
+#define TEX_HEIGHT 32
+
+
 static Vec2f map_to_world(int x, int y) {
     return (Vec2f) { 
         x * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f, 
@@ -300,10 +306,9 @@ static int NUM_STEPS;
 
 static float plane_width;
 
-//static const int supersampling = 32;
+static unsigned int* s_Textures[MAX_TEXTURES];
 
 static const float stop_dist = 0.1f;
-
 static const float mov_speed = 3.f;
 
 // Step angle diff between two rays in radians
@@ -349,6 +354,37 @@ static void globals_Init()
 
     s_Minimap_display = display_create((Vec2i){ 4, 4 }, s_Screen_resolution, BLACK);
     s_Pov_display = display_create((Vec2i) { 4, 4 }, s_Screen_resolution, BLACK);
+
+    for(int i = 0; i < GAME_MAP.num_textures; ++i) {
+        if(i >= MAX_TEXTURES) {
+            LOG_ERR("Max num textures exceeded %d >= %d", i, MAX_TEXTURES);
+            break;
+        }
+        s_Textures[i] = malloc(TEX_WIDTH * TEX_HEIGHT * sizeof(*s_Textures));
+    }
+
+    //generate some textures
+    for(int x = 0; x < TEX_WIDTH; ++x) {
+        for(int y = 0; y < TEX_HEIGHT; ++y)
+        {
+            int xorcolor = (x * 256 / TEX_WIDTH) ^ (y * 256 / TEX_HEIGHT);
+            int ycolor = y * 256 / TEX_HEIGHT;
+            int xycolor = y * 128 / TEX_HEIGHT + x * 128 / TEX_WIDTH;
+            if(GAME_MAP.num_textures >= 8) {
+                s_Textures[0][TEX_WIDTH * y + x] = 65536 * 254 * (x != y && x != TEX_WIDTH - y); //flat red texture with black cross
+                s_Textures[1][TEX_WIDTH * y + x] = xycolor + 256 * xycolor + 65536 * xycolor; //sloped greyscale
+                s_Textures[2][TEX_WIDTH * y + x] = 256 * xycolor + 65536 * xycolor; //sloped yellow gradient
+                s_Textures[3][TEX_WIDTH * y + x] = xorcolor + 256 * xorcolor + 65536 * xorcolor; //xor greyscale
+                s_Textures[4][TEX_WIDTH * y + x] = 256 * xorcolor; //xor green
+                s_Textures[5][TEX_WIDTH * y + x] = 65536 * 192 * (x % 16 && y % 16); //red bricks
+                s_Textures[6][TEX_WIDTH * y + x] = 65536 * ycolor; //red gradient
+                s_Textures[7][TEX_WIDTH * y + x] = 128 + 256 * 128 + 65536 * 128; //flat grey texture
+            }
+            for(int i = 8; i < GAME_MAP.num_textures; ++i) {
+                s_Textures[i][TEX_WIDTH * y + x] = pixel_to_uint(MAGENTA);
+            }
+        }
+    }
 }
 
 #ifdef MINIMAP
@@ -448,22 +484,11 @@ static void gameLogic(float delta_time, bool check_any_input) {
 #ifdef MINIMAP
     Vec2i player_pos_minimap = { map_to_tv_x(player_map.x), map_to_tv_x(player_map.y) };
 #endif
-
-     
-
-    /*player.x += ;
-    player.y += delta_y;*/
-    
     Pixel wallcol = RED;
 
     Pixel ceilcol = GREEN;
     Pixel floorcol = YELLOW;
-
     
-    // Draw near clipping plane
-    
-
-    //int num_rays = plane_width * supersampling;
     int pov_rows = s_Pov_display.tex_buf.height;
     int pov_cols = s_Pov_display.tex_buf.width;
     
@@ -481,8 +506,6 @@ static void gameLogic(float delta_time, bool check_any_input) {
                 draw_POV(i, y, pixel_mulf(ceilcol, 1));
             }
         }
-
-        // Vec2f vpl = vpy + player_look_dir * (plane_dist) + plane_dir * i;
 
         double dirX = player_look_dir.x;
         double dirY = player_look_dir.y;
@@ -904,10 +927,6 @@ void opengl_cleanup()
 
 void update(double delta_time, bool update_check)
 {
-    // render
-    // ------
-    /*glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);*/
     {
         s_Pov_display.tex_buf.updated_this_frame = false;
         s_Minimap_display.tex_buf.updated_this_frame = false;
