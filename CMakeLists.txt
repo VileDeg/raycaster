@@ -31,7 +31,8 @@ if(MSVC)
         /wd4100 # Unreferenced formal parameter (common in window/input callbacks)
         /wd4201 # Nonstandard extension used: nameless struct/union (common in math types)
         /wd4244 # Allow implicit conversion loss of data
-		/wd4459 # Hides global declaration
+		    /wd4459 # Hides global declaration
+        /wd4189 # Variable unused
     )
 else()
     target_compile_options(${MYEXEC} PRIVATE 

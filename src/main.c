@@ -72,7 +72,14 @@ static Display s_Pov_display;
 
 static bool s_Is_display_minimap;
 
-#define TILE_SIZE_UNITS 1.f
+
+// Assume the tile is square on the ground
+#define TILE_WIDTH 1.f
+
+// Wall width / height
+#define TILE_ASPECT 1.f
+#define TILE_HEIGHT (TILE_WIDTH / TILE_ASPECT)
+
 
 #define MAX_TEXTURES 32
 
@@ -82,22 +89,22 @@ static bool s_Is_display_minimap;
 
 static Vec2f map_to_world(int x, int y) {
     return (Vec2f) { 
-        x * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f, 
-        y * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f
+        x * TILE_WIDTH + TILE_WIDTH / 2.f, 
+        y * TILE_WIDTH + TILE_WIDTH / 2.f
     };
 }
 
 static Vec2f map_to_world_v(Vec2i v) {
     return (Vec2f) { 
-        v.x * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f, 
-        v.y * TILE_SIZE_UNITS + TILE_SIZE_UNITS / 2.f
+        v.x * TILE_WIDTH + TILE_WIDTH / 2.f, 
+        v.y * TILE_WIDTH + TILE_WIDTH / 2.f
     };
 }
 
 static Vec2i world_to_map(Vec2f v) {
     return (Vec2i) {
-        v.x / TILE_SIZE_UNITS,
-        v.y / TILE_SIZE_UNITS
+        v.x / TILE_WIDTH,
+        v.y / TILE_WIDTH
     };
 }
 
@@ -106,6 +113,7 @@ static Vec2i s_Screen_resolution;
 
 static float PLAYER_FOV = 66.f; // degrees
 
+// TODO: use log level supplied from CLI arguments
 #define LOG(_Type, _Format, ...) printf("[%s]: %s: " _Format "\n", __func__, _Type, __VA_ARGS__)
 
 #define LOG_WARN(_Format, ...) LOG("WARNING", _Format, __VA_ARGS__)
@@ -341,50 +349,26 @@ static Pixel NEAREST_PLANE_COLOR;
     textureBuffer_setPixel(&s_Pov_display.tex_buf, (x), (y), (pix)); \
 } while(0)
 
+unsigned int get_texture_pixel(int texture, int x, int y) {
+    return s_Textures[texture][x + y * TEX_WIDTH];
+}
 
 static void globals_Init()
 {
     PLAYER_COLOR = RED;
     NEAREST_PLANE_COLOR = MAGENTA;
 
+    // TODO: can scale the plane_width by tile width if want to fit N tiles in screen by width
     plane_width = (float)tan(degToRad(PLAYER_FOV / 2.0));
+    LOG_INFO("View plane width %f, tile size w, h [%f, %f]", plane_width, TILE_WIDTH, TILE_HEIGHT);
     player_world = map_to_world_v(player_map);
+    LOG_INFO("Player map, world: %s, %s", vec2i_str(player_map), vec2f_str(player_world));
 
     s_Screen_resolution = (Vec2i){ 512, 512 };
 
     s_Minimap_display = display_create((Vec2i){ 4, 4 }, s_Screen_resolution, BLACK);
     s_Pov_display = display_create((Vec2i) { 4, 4 }, s_Screen_resolution, BLACK);
 
-    for(int i = 0; i < GAME_MAP.num_textures; ++i) {
-        if(i >= MAX_TEXTURES) {
-            LOG_ERR("Max num textures exceeded %d >= %d", i, MAX_TEXTURES);
-            break;
-        }
-        s_Textures[i] = malloc(TEX_WIDTH * TEX_HEIGHT * sizeof(*s_Textures));
-    }
-
-    //generate some textures
-    for(int x = 0; x < TEX_WIDTH; ++x) {
-        for(int y = 0; y < TEX_HEIGHT; ++y)
-        {
-            int xorcolor = (x * 256 / TEX_WIDTH) ^ (y * 256 / TEX_HEIGHT);
-            int ycolor = y * 256 / TEX_HEIGHT;
-            int xycolor = y * 128 / TEX_HEIGHT + x * 128 / TEX_WIDTH;
-            if(GAME_MAP.num_textures >= 8) {
-                s_Textures[0][TEX_WIDTH * y + x] = 65536 * 254 * (x != y && x != TEX_WIDTH - y); //flat red texture with black cross
-                s_Textures[1][TEX_WIDTH * y + x] = xycolor + 256 * xycolor + 65536 * xycolor; //sloped greyscale
-                s_Textures[2][TEX_WIDTH * y + x] = 256 * xycolor + 65536 * xycolor; //sloped yellow gradient
-                s_Textures[3][TEX_WIDTH * y + x] = xorcolor + 256 * xorcolor + 65536 * xorcolor; //xor greyscale
-                s_Textures[4][TEX_WIDTH * y + x] = 256 * xorcolor; //xor green
-                s_Textures[5][TEX_WIDTH * y + x] = 65536 * 192 * (x % 16 && y % 16); //red bricks
-                s_Textures[6][TEX_WIDTH * y + x] = 65536 * ycolor; //red gradient
-                s_Textures[7][TEX_WIDTH * y + x] = 128 + 256 * 128 + 65536 * 128; //flat grey texture
-            }
-            for(int i = 8; i < GAME_MAP.num_textures; ++i) {
-                s_Textures[i][TEX_WIDTH * y + x] = pixel_to_uint(MAGENTA);
-            }
-        }
-    }
 }
 
 #ifdef MINIMAP
@@ -467,7 +451,7 @@ static void gameLogic(float delta_time, bool check_any_input) {
         Vec2f addx = vec2f_muls(plane_dir, (float)delta_x);
         Vec2f addy = vec2f_muls(player_look_dir, (float)-delta_y);
 
-        Vec2f player_delta_pos = vec2f_divs(vec2f_add(addx, addy), TILE_SIZE_UNITS);
+        Vec2f player_delta_pos = vec2f_divs(vec2f_add(addx, addy), TILE_WIDTH);
 
         Vec2f player_world_next = vec2f_add(player_world, player_delta_pos);
 
@@ -484,8 +468,6 @@ static void gameLogic(float delta_time, bool check_any_input) {
 #ifdef MINIMAP
     Vec2i player_pos_minimap = { map_to_tv_x(player_map.x), map_to_tv_x(player_map.y) };
 #endif
-    Pixel wallcol = RED;
-
     Pixel ceilcol = GREEN;
     Pixel floorcol = YELLOW;
     
@@ -556,7 +538,6 @@ static void gameLogic(float delta_time, bool check_any_input) {
         int stepX;
         int stepY;
 
-        int hit = 0; //was there a wall hit?
         int side = 0; //was a NS or a EW wall hit?
         //calculate step and initial sideDist
         if (rayDirX < 0)
@@ -577,8 +558,10 @@ static void gameLogic(float delta_time, bool check_any_input) {
           stepY = 1;
           sideDistY = (mapY + 1.0 - posY) * deltaDistY;
         }
+
+        int tile = 0;
         //perform DDA
-        while (hit == 0)
+        while (tile == 0)
         {
           //jump to next map square, either in x-direction, or in y-direction
           if (sideDistX < sideDistY)
@@ -594,27 +577,26 @@ static void gameLogic(float delta_time, bool check_any_input) {
           }
 
           // Don't go out of map bounds
-          if (mapX < 0.f || mapY < 0.f ||
-            mapX > GAME_MAP.dim || mapY > GAME_MAP.dim) {
+          if (mapX < 0 || mapY < 0 ||
+            mapX >= GAME_MAP.dim || mapY >= GAME_MAP.dim) {
             break;
           }
 
-          assert(mapX >= 0 && mapX <= GAME_MAP.dim);
-          assert(mapY >= 0 && mapY <= GAME_MAP.dim);
+          assert(mapX >= 0 && mapX < GAME_MAP.dim);
+          assert(mapY >= 0 && mapY < GAME_MAP.dim);
 
-          int tile = GAME_MAP.map[mapX + GAME_MAP.dim * mapY];
+          tile = GAME_MAP.map[mapX + GAME_MAP.dim * mapY];
+          assert(tile < 9);
 
-          //Check if ray has hit a wall
-          if (tile > 0) {
-            hit = 1;
-          }
 
           // TODO: draw ray in top view somehow
           //draw_TV(rayp.x, rayp.y, raycol);
 
         }
 
-        if (!hit) {
+        assert(tile < 9);
+
+        if (!tile) {
           continue;
         }
         //Calculate distance projected on camera direction. This is the shortest distance from the point where the wall is
@@ -631,20 +613,56 @@ static void gameLogic(float delta_time, bool check_any_input) {
 
         //int height = POV_ROWS * (1 - factor);
                //*/
-        int wall_height = (int)(pov_rows / perpWallDist);
+        //int wall_height = (int)(pov_rows / perpWallDist);
+
+        // How much of the tile fits in the screen by width
+        //float tile_screen_scale = TILE_WIDTH / plane_width;
+        float tile_screen_scale = 1.f;
+
+        float wall_height_scale = TILE_HEIGHT * tile_screen_scale / (1 + perpWallDist);
+        //float wall_height_scale = TILE_HEIGHT * tile_screen_scale / perpWallDist;
+
+        
+        //int wall_height_rows = pov_rows * wall_height_scale;
+        int wall_height_rows = (int)(pov_rows / perpWallDist);
+        wall_height_rows = min(wall_height_rows, pov_rows);
+
+
+
         /*/
 
         int height = 1 / dist_to_wall * scr.POV_ROWS ;
 
         //*/
 
-        int half_h = wall_height / 2;
+        
 
-        int half_r = pov_rows / 2;
+        //float brightness = wall_height_rows / (float)pov_rows;
+        float brightness = 1;
 
-        float brightness = wall_height / (float)pov_rows;
+        //wallcol = side > 0 ? RED : BLUE;
+        
+        float wallX;
+        if(side == 0) {
+            wallX = posY + rayDirY * perpWallDist;
+        } else {
+            wallX = posX + rayDirX * perpWallDist;
+        }
+        // Get the range [0, 1] inside the tile. Account for tile width.
+        wallX = fmod(wallX, TILE_WIDTH) / TILE_WIDTH;
 
-        wallcol = side > 0 ? RED : BLUE;
+        // Local X coordinate in the texture
+        int texX = wallX * TEX_WIDTH;
+
+        if(
+            side == 0 && rayDirX > 0 && 
+            side == 1 && rayDirY < 0
+        ) {
+            texX = TEX_WIDTH - texX - 1;
+        }
+
+        
+
         // Draw wall
 
         /*textureBuffer_setColumn_color(
@@ -655,11 +673,35 @@ static void gameLogic(float delta_time, bool check_any_input) {
             pixel_mulf(wallcol, brightness)
         );*/
 
-        for (int y = max(half_r - half_h, 0); y < min(half_r + half_h, pov_rows); ++y) {
-          draw_POV(i, y, pixel_mulf(wallcol, brightness));
+        assert(tile > 0);
+
+        // texture id starts from 0 while tile 0 means empty
+        int texture = tile - 1;
+
+        int wall_pov_difference_half = (wall_height_rows - pov_rows) / 2;
+
+        /* Two cases:
+        * 1. Wall is heigher or equal than the screen
+        * 2. Wall is lower than the screen
+        */
+        if(wall_height_rows > pov_rows) {
+            for(int y = 0; y < pov_rows; ++y) {
+                int texY = y + wall_pov_difference_half;
+                // Map to texture space
+                texY = (float)texY / pov_rows * TEX_WIDTH;
+                Pixel wallcol = pixel_from_uint(get_texture_pixel(texture, texX, texY));
+                draw_POV(i, y, pixel_mulf(wallcol, brightness));
+            }
         }
 
-
+        if(pov_rows > wall_height_rows) {
+            for(int y = -wall_pov_difference_half; y < pov_rows + wall_pov_difference_half; ++y) {
+                // Map to texture space
+                int texY = (float)y / pov_rows * TEX_WIDTH;
+                Pixel wallcol = pixel_from_uint(get_texture_pixel(texture, texX, texY));
+                draw_POV(i, y, pixel_mulf(wallcol, brightness));
+            }
+        }
 
 }
 
@@ -965,6 +1007,37 @@ int main(void)
 
     if (gameMap_init(&GAME_MAP, "maps/00.txt") != 0) {
         return -1;
+    }
+
+
+    for(int i = 0; i < GAME_MAP.num_textures; ++i) {
+        if(i >= MAX_TEXTURES) {
+            LOG_ERR("Max num textures exceeded %d >= %d", i, MAX_TEXTURES);
+            break;
+        }
+        s_Textures[i] = malloc(TEX_WIDTH * TEX_HEIGHT * sizeof(*s_Textures));
+    }
+
+    //generate some textures
+    for(int y = 0; y < TEX_HEIGHT; ++y) {
+        for(int x = 0; x < TEX_WIDTH; ++x) {
+            int xorcolor = (x * 256 / TEX_WIDTH) ^ (y * 256 / TEX_HEIGHT);
+            int ycolor = y * 256 / TEX_HEIGHT;
+            int xycolor = y * 128 / TEX_HEIGHT + x * 128 / TEX_WIDTH;
+            if(GAME_MAP.num_textures >= 8) {
+                s_Textures[0][TEX_WIDTH * y + x] = 65536 * 254 * (x != y && x != TEX_WIDTH - y); //flat red texture with black cross
+                s_Textures[1][TEX_WIDTH * y + x] = xycolor + 256 * xycolor + 65536 * xycolor; //sloped greyscale
+                s_Textures[2][TEX_WIDTH * y + x] = 256 * xycolor + 65536 * xycolor; //sloped yellow gradient
+                s_Textures[3][TEX_WIDTH * y + x] = xorcolor + 256 * xorcolor + 65536 * xorcolor; //xor greyscale
+                s_Textures[4][TEX_WIDTH * y + x] = 256 * xorcolor; //xor green
+                s_Textures[5][TEX_WIDTH * y + x] = 65536 * 192 * (x % 16 && y % 16); //red bricks
+                s_Textures[6][TEX_WIDTH * y + x] = 65536 * ycolor; //red gradient
+                s_Textures[7][TEX_WIDTH * y + x] = 128 + 256 * 128 + 65536 * 128; //flat grey texture
+            }
+            for(int i = 8; i < GAME_MAP.num_textures; ++i) {
+                s_Textures[i][TEX_WIDTH * y + x] = pixel_to_uint(MAGENTA);
+            }
+        }
     }
 
     update(0, false);

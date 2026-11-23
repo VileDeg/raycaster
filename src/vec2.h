@@ -4,7 +4,7 @@
 //#include <math.h>
 #include <stdio.h>
 
-#define VEC2_BUF_LEN 16
+#define VEC2_BUF_LEN 64
 #define VEC2_EPS 0.000001f
 
 // Defines the struct: e.g., Vec2f or Vec2i
