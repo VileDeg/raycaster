@@ -67,6 +67,18 @@ static Display display_create(Vec2i pix_dim, Vec2i screen_resolution, Pixel clea
     return d;
 }
 
+static Vec2i display_get_real_resolution(Display* display, Vec2i screen_resolution) {
+    return (Vec2i){ 
+        screen_resolution.x / display->pix_dim.x,
+        screen_resolution.y / display->pix_dim.y 
+    };
+}
+
+static float display_get_aspect_ratio(Display* display, Vec2i screen_resolution) {
+    Vec2i resolution = display_get_real_resolution(display, screen_resolution);
+    return (float)resolution.x / resolution.y;
+}
+
 static Display s_Minimap_display;
 static Display s_Pov_display;
 
@@ -111,7 +123,10 @@ static Vec2i world_to_map(Vec2f v) {
 // Actual screen resolution in pixels
 static Vec2i s_Screen_resolution;
 
-static float PLAYER_FOV = 66.f; // degrees
+#define DEFAULT_FOV 66.f
+
+static float s_Horizontal_fov = DEFAULT_FOV; // degrees
+static float s_Vertical_fov = DEFAULT_FOV;
 
 // TODO: use log level supplied from CLI arguments
 #define LOG(_Type, _Format, ...) printf("[%s]: %s: " _Format "\n", __func__, _Type, __VA_ARGS__)
@@ -317,7 +332,7 @@ static float plane_width;
 
 /* 
 * Array of textures.
-* Each texture stored as ROW-MAJOR array of bytes.
+* Each texture stored as ROW-MAJOR, TOP_DOWN array of bytes.
 */
 static unsigned int* s_Textures[MAX_TEXTURES];
 
@@ -364,7 +379,7 @@ static void globals_Init()
     NEAREST_PLANE_COLOR = MAGENTA;
 
     // TODO: can scale the plane_width by tile width if want to fit N tiles in screen by width
-    plane_width = (float)tan(degToRad(PLAYER_FOV / 2.0));
+    plane_width = (float)tan(degToRad(s_Horizontal_fov / 2.0));
     LOG_INFO("View plane width %f, tile size w, h [%f, %f]", plane_width, TILE_WIDTH, TILE_HEIGHT);
     player_world = map_to_world_v(player_map);
     LOG_INFO("Player map, world: %s, %s", vec2i_str(player_map), vec2f_str(player_world));
@@ -376,6 +391,11 @@ static void globals_Init()
 #endif
     s_Pov_display = display_create((Vec2i) { 4, 4 }, s_Screen_resolution, BLACK);
 
+    // TODO: display_get_aspect_ratio
+    Vec2i resolution = display_get_real_resolution(&s_Pov_display, s_Screen_resolution);
+    float aspect_ratio = (float)resolution.x / resolution.y;
+
+    s_Vertical_fov = s_Horizontal_fov / aspect_ratio;
 }
 
 #ifdef MINIMAP
@@ -475,27 +495,20 @@ static void gameLogic(float delta_time, bool check_any_input) {
 #ifdef MINIMAP
     Vec2i player_pos_minimap = { map_to_tv_x(player_map.x), map_to_tv_x(player_map.y) };
 #endif
-    Pixel ceilcol = YELLOW;
-    Pixel floorcol = GREEN;
+    //Pixel ceilcol = YELLOW;
+    //Pixel floorcol = GREEN;
     
     int pov_rows = s_Pov_display.tex_buf.height;
     int pov_cols = s_Pov_display.tex_buf.width;
+
+    float aspect = display_get_aspect_ratio(&s_Pov_display, s_Screen_resolution);
+    float H = 2 * tanf(degToRad(s_Horizontal_fov / 2.f)) + plane_width;
+    H /= aspect;
+
+    float tile_height = TILE_WIDTH / H * 1.5f; // TODO: why does 1.5f work for walls? Experimental
     
     for (int i = 0; i < pov_cols; ++i) {
-        // Draw floor and ceiling
-        {
-            int half_r = pov_rows / 2;
-            // TODO: use setColumn func
-            // Ceiling
-            for (int y = 0; y < half_r + 1; ++y) {
-                draw_POV(i, y, pixel_mulf(ceilcol, 1));
-            }
-            // Floor
-            for (int y = half_r + 1; y < pov_rows; ++y) {
-                draw_POV(i, y, pixel_mulf(floorcol, 1));
-            }
-        }
-
+       
         double dirX = player_look_dir.x;
         double dirY = player_look_dir.y;
 
@@ -506,6 +519,46 @@ static void gameLogic(float delta_time, bool check_any_input) {
         double cameraX = 2 * i / (double)pov_cols - 1; //x-coordinate in camera space
         double rayDirX = dirX + planeX * cameraX;
         double rayDirY = dirY + planeY * cameraX;
+
+        // Draw floor and ceiling
+        {
+            // + 1 row because we want to get the angle when ray is in the middle of a pixel, not after the pixel
+            float degrees_per_pixel = s_Vertical_fov / (pov_rows + 1);
+            int half_r = pov_rows / 2;
+
+            Vec2f ray_dir = (Vec2f){ rayDirX, rayDirY };
+
+            float height = tile_height * 0.5f; // TODO: 0.5f is experimental doesn tw ork
+            
+
+            // Ceiling & floor
+            for (int y = 0; y < pov_rows; ++y) {
+
+                bool is_ceiling = y < half_r;
+                int iter = (is_ceiling ? half_r - y : y - half_r + 1);
+                float fov_angle = iter * degrees_per_pixel;
+                float sample_point_z = height / tanf(degToRad(fov_angle)); // TODO: precompute tanf
+                Vec2f sample_point_world = vec2f_add(
+                    player_world, 
+                    vec2f_muls(ray_dir, sample_point_z)
+                );
+                // Sample the selected repeating texture
+                int texX = fmod(sample_point_world.x, TILE_WIDTH) / TILE_WIDTH * TEX_WIDTH;
+                int texY = fmod(sample_point_world.y, TILE_WIDTH) / TILE_WIDTH * TEX_HEIGHT;
+
+                texX = texX < 0 ? TEX_WIDTH + texX : texX;
+                texY = texY > 0 ? TEX_HEIGHT - texY : texY;
+
+                Pixel color = pixel_from_uint(get_texture_pixel(is_ceiling ? 2 : 5, texX, texY));
+
+                draw_POV(i, y, pixel_mulf(color, 1));
+            }
+            // Floor
+            /*for (int y = half_r + 1; y < pov_rows; ++y) {
+            draw_POV(i, y, pixel_mulf(floorcol, 1));
+            }*/
+        }
+
 
         //printf("rayDir: %f, %f\n", rayDirX, rayDirY);
 
@@ -623,17 +676,19 @@ static void gameLogic(float delta_time, bool check_any_input) {
         //int wall_height = (int)(pov_rows / perpWallDist);
 
         // How much of the tile fits in the screen by width
-        //float tile_screen_scale = TILE_WIDTH / plane_width;
-        float tile_screen_scale = 1.f;
+        float tile_screen_scale = TILE_WIDTH / plane_width;
 
-        float wall_height_scale = TILE_HEIGHT * tile_screen_scale / (1 + perpWallDist);
-        //float wall_height_scale = TILE_HEIGHT * tile_screen_scale / perpWallDist;
 
+        //float tile_screen_scale = 1.f;
+
+      
+
+        //float wall_height_scale = TILE_HEIGHT * tile_screen_scale / (1 + perpWallDist);
+        //float wall_height_scale = TILE_HEIGHT / tile_screen_scale / perpWallDist;
         
         //int wall_height_rows = pov_rows * wall_height_scale;
-        int wall_height_rows = (int)(pov_rows / perpWallDist);
+        int wall_height_rows = pov_rows * tile_height / perpWallDist;
         //wall_height_rows = min(wall_height_rows, pov_rows);
-
 
 
         /*/
@@ -1031,6 +1086,8 @@ int main(void)
         s_Textures[i] = malloc(TEX_WIDTH * TEX_HEIGHT * sizeof(*s_Textures));
     }
 
+#define BRICK_hehe (x % 8 && y % 8)
+
     //generate some textures
     for(int y = 0; y < TEX_HEIGHT; ++y) {
         for(int x = 0; x < TEX_WIDTH; ++x) {
@@ -1043,9 +1100,12 @@ int main(void)
                 s_Textures[2][TEX_WIDTH * y + x] = 256 * xycolor + 65536 * xycolor; //sloped yellow gradient
                 s_Textures[3][TEX_WIDTH * y + x] = xorcolor + 256 * xorcolor + 65536 * xorcolor; //xor greyscale
                 s_Textures[4][TEX_WIDTH * y + x] = 256 * xorcolor; //xor green
-                s_Textures[5][TEX_WIDTH * y + x] = 65536 * 192 * (x % 16 && y % 16); //red bricks
+                s_Textures[5][TEX_WIDTH * y + x] = 65536 * 192 * BRICK_hehe; //red bricks
                 s_Textures[6][TEX_WIDTH * y + x] = 65536 * ycolor; //red gradient
                 s_Textures[7][TEX_WIDTH * y + x] = 128 + 256 * 128 + 65536 * 128; //flat grey texture
+                //s_Textures[8][TEX_WIDTH * y + x] = BRICK_hehe + 256 * BRICK_hehe + 65536 * BRICK_hehe; //grey bricks
+                s_Textures[8][TEX_WIDTH * y + x] = 128 * BRICK_hehe + 256 * 128 * BRICK_hehe + 65536 * 128 * BRICK_hehe; //flat grey texture
+
             }
             for(int i = 8; i < GAME_MAP.num_textures; ++i) {
                 s_Textures[i][TEX_WIDTH * y + x] = pixel_to_uint(MAGENTA);

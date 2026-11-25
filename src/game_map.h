@@ -50,7 +50,8 @@ int gameMap_init(GameMap* gm, const char* map_filename) {
             i++;
         }
     }
-    gm->num_textures = max_tile;
+    // Also ceiling and floor
+    gm->num_textures = max_tile + 2;
 
     fclose(file);
 
