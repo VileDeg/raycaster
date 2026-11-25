@@ -217,6 +217,7 @@ static int round_to(int src, int val, bool up) {
 // ---------------------------------------------------------------------------------------------
 void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
+    // TODO: update both pixel dim or do it on minimap toggle
     Vec2i pixel_dim = s_Is_display_minimap ? s_Minimap_display.pix_dim : s_Pov_display.pix_dim;
     assert(!(pixel_dim.x % 2) && !(pixel_dim.y % 2) && "Pix dim must be even");
 
@@ -314,6 +315,10 @@ static int NUM_STEPS;
 
 static float plane_width;
 
+/* 
+* Array of textures.
+* Each texture stored as ROW-MAJOR array of bytes.
+*/
 static unsigned int* s_Textures[MAX_TEXTURES];
 
 static const float stop_dist = 0.1f;
@@ -364,9 +369,11 @@ static void globals_Init()
     player_world = map_to_world_v(player_map);
     LOG_INFO("Player map, world: %s, %s", vec2i_str(player_map), vec2f_str(player_world));
 
-    s_Screen_resolution = (Vec2i){ 512, 512 };
+    s_Screen_resolution = (Vec2i){ 1024, 1024 };
 
+#ifdef MINIMAP
     s_Minimap_display = display_create((Vec2i){ 4, 4 }, s_Screen_resolution, BLACK);
+#endif
     s_Pov_display = display_create((Vec2i) { 4, 4 }, s_Screen_resolution, BLACK);
 
 }
@@ -468,8 +475,8 @@ static void gameLogic(float delta_time, bool check_any_input) {
 #ifdef MINIMAP
     Vec2i player_pos_minimap = { map_to_tv_x(player_map.x), map_to_tv_x(player_map.y) };
 #endif
-    Pixel ceilcol = GREEN;
-    Pixel floorcol = YELLOW;
+    Pixel ceilcol = YELLOW;
+    Pixel floorcol = GREEN;
     
     int pov_rows = s_Pov_display.tex_buf.height;
     int pov_cols = s_Pov_display.tex_buf.width;
@@ -479,13 +486,13 @@ static void gameLogic(float delta_time, bool check_any_input) {
         {
             int half_r = pov_rows / 2;
             // TODO: use setColumn func
-            // Floor
+            // Ceiling
             for (int y = 0; y < half_r + 1; ++y) {
-                draw_POV(i, y, pixel_mulf(floorcol, 1));
-            }
-            // Ceilling
-            for (int y = half_r + 1; y < pov_rows; ++y) {
                 draw_POV(i, y, pixel_mulf(ceilcol, 1));
+            }
+            // Floor
+            for (int y = half_r + 1; y < pov_rows; ++y) {
+                draw_POV(i, y, pixel_mulf(floorcol, 1));
             }
         }
 
@@ -625,7 +632,7 @@ static void gameLogic(float delta_time, bool check_any_input) {
         
         //int wall_height_rows = pov_rows * wall_height_scale;
         int wall_height_rows = (int)(pov_rows / perpWallDist);
-        wall_height_rows = min(wall_height_rows, pov_rows);
+        //wall_height_rows = min(wall_height_rows, pov_rows);
 
 
 
@@ -678,26 +685,32 @@ static void gameLogic(float delta_time, bool check_any_input) {
         // texture id starts from 0 while tile 0 means empty
         int texture = tile - 1;
 
-        int wall_pov_difference_half = (wall_height_rows - pov_rows) / 2;
+        float wall_pov_difference_half = (wall_height_rows - pov_rows) / 2.f;
 
         /* Two cases:
         * 1. Wall is heigher or equal than the screen
         * 2. Wall is lower than the screen
         */
-        if(wall_height_rows > pov_rows) {
+        float step = 1.f / wall_height_rows * TEX_WIDTH;
+
+
+        if(wall_height_rows >= pov_rows) {
             for(int y = 0; y < pov_rows; ++y) {
-                int texY = y + wall_pov_difference_half;
+                int texY = y + (int)wall_pov_difference_half;
                 // Map to texture space
-                texY = (float)texY / pov_rows * TEX_WIDTH;
+                texY = (float)texY * step;
+                assert(texY >= 0 && texY < TEX_WIDTH);
                 Pixel wallcol = pixel_from_uint(get_texture_pixel(texture, texX, texY));
                 draw_POV(i, y, pixel_mulf(wallcol, brightness));
             }
         }
 
         if(pov_rows > wall_height_rows) {
-            for(int y = -wall_pov_difference_half; y < pov_rows + wall_pov_difference_half; ++y) {
+            for(int y = -(int)wall_pov_difference_half; y < pov_rows - (int)ceilf(-wall_pov_difference_half); ++y) {
+                int texY = y + wall_pov_difference_half;
                 // Map to texture space
-                int texY = (float)y / pov_rows * TEX_WIDTH;
+                texY = (float)texY * step;
+                assert(texY >= 0 && texY < TEX_WIDTH);
                 Pixel wallcol = pixel_from_uint(get_texture_pixel(texture, texX, texY));
                 draw_POV(i, y, pixel_mulf(wallcol, brightness));
             }

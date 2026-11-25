@@ -30,6 +30,7 @@ Pixel pixel_mulf(Pixel p, float f) {
     return p;
 }
 
+// TODO: do a direct memcopy assuming same byte-order
 Pixel pixel_from_uint(unsigned int v) {
     Pixel p;
     p.r = v >> 16 & 0xFF;
@@ -86,23 +87,22 @@ void textureBuffer_fill(TextureBuffer* tb, Pixel col) {
 void textureBuffer_reset(TextureBuffer* tb, int width, int height) {
     assert(sizeof(Pixel) == 4);
 
-    width -= width % 2;
-    height -= height % 2;
+    if(tb->width != width || tb->height != height) {
+        // Round down to even
+        tb->width  = width  - width  % 2;
+        tb->height = height - height % 2;
 
-    // Round down to even
-    tb->width = width;
-    tb->height = height;
+        if (width < 2 || height < 2) {
+            return;
+        }
 
-    if (width < 1 || height < 1) {
-        return;
-    }
-
-    tb->data = tb->data
-        ? realloc(tb->data, tb->width * tb->height * sizeof(Pixel))
-        : malloc(tb->width * tb->height * sizeof(Pixel));
-    if (tb->data == NULL) {
-        perror("Fatal error: realloc failed");
-        exit(1);
+        tb->data = tb->data
+            ? realloc(tb->data, tb->width * tb->height * sizeof(Pixel))
+            : malloc(tb->width * tb->height * sizeof(Pixel));
+        if (tb->data == NULL) {
+            perror("Fatal error: realloc failed");
+            exit(1);
+        }
     }
 
     // Fill with color black
@@ -169,7 +169,7 @@ void textureBuffer_setPixel(TextureBuffer* tb, int x, int y, Pixel p) {
     );
 
     // Flip Y axis since the buffer is bottom-up
-    tb->data[x * tb->height + tb->height - y] = p;
+    tb->data[x * tb->height + tb->height - y - 1] = p;
     tb->updated_this_frame = true;
 }
 
